@@ -231,6 +231,7 @@ export function createPanel(root, actions) {
     const subjectsSlot = h('div');
     const alsoSlot = h('div');
     const descriptionSlot = h('div');
+    const linkSlot = h('div');
 
     const authorButtons = (node.authors || []).filter((a) => a.name);
     const byline = authorButtons.length
@@ -270,6 +271,8 @@ export function createPanel(root, actions) {
       ),
       relation ? h('p', { class: 'relation', text: relation }) : null,
       meta,
+      // What the book is about comes before where it sits on the map.
+      descriptionSlot,
       subjectsSlot,
       nodeActions(
         id,
@@ -278,7 +281,7 @@ export function createPanel(root, actions) {
       ),
       relatedSection(node, token),
       alsoSlot,
-      descriptionSlot,
+      linkSlot,
     );
 
     ol.bookByKey(node.key)
@@ -293,14 +296,9 @@ export function createPanel(root, actions) {
         const subjects = subjectList(book.subjects.length ? book.subjects : node.subjects);
         if (subjects) subjectsSlot.replaceWith(subjects);
 
-        descriptionSlot.replaceWith(
-          h(
-            'div',
-            { class: 'section' },
-            book.description ? h('p', { class: 'bio', text: book.description }) : null,
-            externalLink(ol.workUrl(book.key), 'Open on Open Library'),
-          ),
-        );
+        if (book.description) descriptionSlot.replaceWith(h('p', { class: 'bio', text: book.description }));
+        else descriptionSlot.remove();
+        linkSlot.replaceWith(h('div', { class: 'section' }, externalLink(ol.workUrl(book.key), 'Open on Open Library')));
       })
       .catch((err) => {
         if (token === detailToken) meta.textContent = err.message || '';
@@ -344,6 +342,7 @@ export function createPanel(root, actions) {
     const influenceSlot = h('div');
     const worksSlot = h('section', { class: 'section' }, h('h3', { text: 'Best known for' }), skeletonList());
     const bioSlot = h('div');
+    const linkSlot = h('div');
     const headingSlot = h('div', { class: 'detail-head' });
 
     headingSlot.append(
@@ -359,11 +358,13 @@ export function createPanel(root, actions) {
       headingSlot,
       relation ? h('p', { class: 'relation', text: relation }) : null,
       meta,
+      // Who the writer is comes before what they're filed under.
+      bioSlot,
       subjectsSlot,
       nodeActions(id, node, [button('Trace their influence', () => actions.openInfluence(node.key, node.label))]),
       influenceSlot,
       worksSlot,
-      bioSlot,
+      linkSlot,
     );
 
     // An author found only through Wikidata may have no Open Library record at
@@ -378,14 +379,9 @@ export function createPanel(root, actions) {
           meta.textContent = span || '';
           const photo = coverImage(ol.authorPhotoUrl(author.photoId, 'M'), `Photograph of ${author.name}`, 'portrait');
           if (photo) headingSlot.prepend(photo);
-          bioSlot.replaceWith(
-            h(
-              'div',
-              { class: 'section' },
-              author.bio ? h('p', { class: 'bio', text: author.bio }) : null,
-              externalLink(ol.authorUrl(author.key), 'Open on Open Library'),
-            ),
-          );
+          if (author.bio) bioSlot.replaceWith(h('p', { class: 'bio', text: author.bio }));
+          else bioSlot.remove();
+          linkSlot.replaceWith(h('div', { class: 'section' }, externalLink(ol.authorUrl(author.key), 'Open on Open Library')));
           loadInfluence(author.wikidata || node.qid, node, token, influenceSlot, meta);
         })
         .catch(() => {
@@ -433,6 +429,7 @@ export function createPanel(root, actions) {
       meta.textContent = 'Not on Open Library, so there are no books to show here.';
       worksSlot.remove();
       bioSlot.remove();
+      linkSlot.remove();
       loadInfluence(node.qid, node, token, influenceSlot, meta);
     }
   }

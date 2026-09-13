@@ -800,7 +800,7 @@ svg.map.picking .node {
 
 .bio {
   display: -webkit-box;
-  margin: 0 0 12px;
+  margin: 12px 0 14px;
   overflow: hidden;
   font-family: var(--serif);
   color: var(--mist);
