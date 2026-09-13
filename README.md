@@ -119,7 +119,9 @@ Neither service is contacted. `test/harness.mjs` answers in the same shapes the 
 - Open Library's search can be slow under load. Requests time out after twenty seconds with a message saying so.
 
 ## Next steps
-
+- **Bugs:** 
+    * When selecting an author, under influnce, there is often nullnull written.
+- **Very next:** When clicking on a book, have the description much higher up. Right now its all the way down. Either below the 
 - **Next:** Subject maps that show writers as well as books, so a territory can be read either way without switching maps.
 - **Then:** Use Open Library's subject facets to suggest where to go next from a subject map — the headings that keep company with the one you're on.
 - **Then:** Influence maps seeded from a book rather than a writer, following the book's author but weighting toward writers working in the same form.

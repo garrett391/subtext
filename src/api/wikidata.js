@@ -197,9 +197,9 @@ export function influenceNeighbours(qids) {
       const rows = await runQuery(`
         SELECT DISTINCT ?from ?fromLabel ?fromOl ?to ?toLabel ?toOl WHERE {
           VALUES ?anchor { ${entities(batch)} }
-          { ?anchor wdt:P737 ?to . BIND(?anchor AS ?from) }
+          { ?anchor wdt:P737 ?from . BIND(?anchor AS ?to) }
           UNION
-          { ?from wdt:P737 ?anchor . BIND(?anchor AS ?to) }
+          { ?to wdt:P737 ?anchor . BIND(?anchor AS ?from) }
           OPTIONAL { ?from wdt:P648 ?fromOl . }
           OPTIONAL { ?to wdt:P648 ?toOl . }
           SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
