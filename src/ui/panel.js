@@ -502,7 +502,9 @@ export function createPanel(root, actions) {
             : null;
 
         const anything = facts.influencedBy.length || facts.influenced.length;
-        slot.replaceChildren(
+        // replaceChildren is the native call, which turns a null into the
+        // text "null", so anything conditional has to be filtered out first.
+        const parts = [
           h('h3', { text: 'Influence' }),
           lines.length ? h('p', { class: 'hint', text: lines.join(' ') }) : null,
           anything
@@ -521,7 +523,8 @@ export function createPanel(root, actions) {
               )
             : null,
           facts.article ? h('div', { class: 'subsection' }, externalLink(facts.article, 'Read on Wikipedia')) : null,
-        );
+        ];
+        slot.replaceChildren(...parts.filter(Boolean));
       })
       .catch(() => {
         if (token === detailToken) slot.remove();
