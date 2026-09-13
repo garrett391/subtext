@@ -277,6 +277,23 @@ svg.map.picking .node {
   font-size: 21px;
   font-weight: 500;
   letter-spacing: -0.01em;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 8px;
+}
+
+/* The wordmark is the way back to the start, so it behaves like a link. */
+.wordmark:hover {
+  color: var(--paper);
+}
+
+.wordmark:hover .spectrum-dot {
+  transform: scale(1.12);
+}
+
+.wordmark:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 4px;
 }
 
 .spectrum-dot {
@@ -284,6 +301,7 @@ svg.map.picking .node {
   width: 16px;
   height: 16px;
   border-radius: 50%;
+  transition: transform 160ms ease;
   background:
     radial-gradient(circle, #f6f2ec 0 16%, rgba(246, 242, 236, 0) 62%),
     conic-gradient(

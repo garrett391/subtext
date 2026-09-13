@@ -93,6 +93,17 @@ await test('a named route rewrites itself to a stable ID', async () => {
   assert.match($('map-title').textContent, /Books beside Maus/);
 });
 
+await test('the wordmark leads back to the start', async () => {
+  assert.equal($('empty').hidden, true);
+  const wordmark = window.document.querySelector('.wordmark');
+  assert.ok(wordmark, 'no wordmark');
+  wordmark.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  await settle(300);
+  assert.equal(window.location.hash, '');
+  assert.equal($('empty').hidden, false);
+  assert.equal($('crumb').hidden, true);
+});
+
 
 async function typeSearch(query) {
   window.location.hash = '';
