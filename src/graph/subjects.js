@@ -38,6 +38,7 @@ const NOISE_FRAGMENTS = [
   'staff picks',
   'nyt:',
   'award:',
+  'collection:',
   'ol_',
   'bestseller',
   'open library',
@@ -110,6 +111,23 @@ const GENERIC = new Set([
 
 const MAX_LENGTH = 58;
 
+/**
+ * Some uploaders file headings with a namespace on the front: "genre:high
+ * fantasy", "form:novel", "series:Stormlight Archive". The namespaced spelling
+ * is a private vocabulary \u2014 "genre:high fantasy" sits on 98 works, 36 of them
+ * volumes of two Japanese series, where plain "high fantasy" sits on nearly
+ * nine hundred. Dropping the prefix puts the book back under the heading
+ * everyone else used.
+ *
+ * "series:" is kept, since sharing a series is about as strong a link as two
+ * books can have, but a series heading names a handful of books at most and so
+ * is never worth a search: see `distinctiveSubjects`.
+ */
+const STRIP_PREFIX = /^(genre|form|subject|topic):\s*/;
+const SERIES_PREFIX = /^series:/;
+
+export const isSeriesHeading = (facet) => SERIES_PREFIX.test(facet);
+
 export function normalizeSubject(raw) {
   const text = String(raw || '')
     .replace(/[\u2018\u2019\u201c\u201d]/g, "'")
@@ -117,7 +135,11 @@ export function normalizeSubject(raw) {
     .trim()
     .replace(/[.,;:]+$/, '')
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .replace(STRIP_PREFIX, '')
+    // "series:A_Court_of_Thorns_and_Roses" and "series:A Court of Thorns and
+    // Roses" are the same series.
+    .replace(/_/g, ' ');
   if (text.length < 3 || text.length > MAX_LENGTH) return '';
   if (NOISE_EXACT.has(text)) return '';
   if (NOISE_FRAGMENTS.some((fragment) => text.includes(fragment))) return '';
@@ -228,9 +250,15 @@ export function distinctiveSubjects(subjects, counts, limit = 8) {
   for (const raw of subjects || []) {
     const full = normalizeSubject(raw);
     if (!full) continue;
+    // A series heading returns the series and nothing else: one or two books
+    // for a whole search. It still counts towards similarity, just not here.
+    if (isSeriesHeading(full)) continue;
     const weight = facetWeight(full, counts);
     if (!seen.has(full) || seen.get(full).weight < weight) {
-      seen.set(full, { subject: String(raw).trim(), key: full, weight });
+      // What gets searched is the heading as everyone else spelled it, with the
+      // uploader's namespace gone but the original casing kept for display.
+      const subject = String(raw).trim().replace(/^(genre|form|subject|topic):\s*/i, '').replace(/_/g, ' ');
+      seen.set(full, { subject, key: full, weight });
     }
   }
   const ranked = [...seen.values()].sort((a, b) => b.weight - a.weight);

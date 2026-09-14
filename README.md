@@ -47,13 +47,25 @@ Paths have their own URLs, so `#path/book/OL2163089W/to/book/OL3521805W` can be 
 
 **Data.** [Open Library](https://openlibrary.org) supplies titles, writers, covers, and the subject headings every map is built from. [Wikidata](https://www.wikidata.org) supplies the influence arrows. Neither needs a key.
 
-**Similarity.** Open Library has no "books like this book" endpoint, so similarity is computed rather than looked up. Every work carries a list of subjects, and three things happen to that list before it's usable:
+**Similarity.** Open Library has no "books like this book" endpoint, so similarity is computed rather than looked up. It rests mostly on subjects, with where a book is shelved and how long it is as second opinions. Every work carries a list of subjects, and three things happen to that list before it's usable:
 
 1. *The metadata goes.* A lot of what's filed under "subjects" describes the scan rather than the book — "Accessible book", "Protected DAISY", "nyt:graphic_books=2010-04-25".
 2. *Compound headings are split into facets.* Library subjects arrive as compounds: `Superheroes -- Comic books, strips, etc.`, or the publisher's `COMICS & GRAPHIC NOVELS / Superheroes`. Splitting on the separators means a book catalogued one way still matches a book catalogued the other.
 3. *They're weighted by rarity.* "Fiction" says almost nothing; "Autobiographical comics" says almost everything. Every subject search reports how many books carry that heading, and that count becomes the weight. Subtext remembers what it learns, so later maps in a session are sharper than earlier ones.
 
+Two things about how headings are *searched*, as opposed to compared, also matter. Some uploaders file headings under a namespace of their own — `genre:high fantasy`, `form:novel` — and the namespaced spelling is a private vocabulary: `genre:high fantasy` sits on 98 works, 36 of them volumes of two Japanese series, where plain `high fantasy` sits on nearly nine hundred. The prefix comes off, and the book goes back under the heading everyone else used. `series:` headings are kept for similarity, since sharing a series is about as strong a link as two books can have, but never searched, because a series heading returns the series and nothing else. And a long-running series is catalogued one volume at a time with the same headings on every volume, so one manga can take twenty-eight of the forty places under a heading; from a writer's third book under one heading, each counts for less than the last.
+
 Two books are then compared by cosine similarity over those weighted facets.
+
+**Shelves.** Subject headings are flat labels, and that is their weakness: "feminism" is stamped on the theory and on the novel alike. Call numbers are a hierarchy, so they can tell those apart, and Open Library sends two of them along with every search result at no extra cost — the Library of Congress class and the Dewey number. *The Stepford Wives* is PS3523 and *The Politics of Reality* is HQ1154: same subject, different floor of the building.
+
+What a call number means depends on where in the scheme it sits, which is the part worth getting right. In most classes the number is the topic, and numbers that sit near each other are about things that sit near each other — HQ1154 and HQ1190 are both women's studies, PN6727 and PN6737 are both comics. But class P, Language and Literature, is where most fiction lands, and inside its national literatures the big ranges are *individual authors*, numbered by the author's period and the first letter of their surname. Mistborn is PS3619.A533: PS is American literature, 3619 is "began publishing in 2001 or later, surname begins with S", and .A533 is the cutter for "anderson". Nothing in it is a subject, and the next number along is the next letter of the alphabet. So proximity is switched off in those ranges, and what's read off them instead is the period, which puts contemporaries together — something a publication year can't do, since a year is contaminated by every reprint.
+
+A book carries a call number for every edition anyone catalogued, and they disagree; the commonest one wins. The real record for *The Stepford Wives* has eight PS3523s, four PZ4s, and one PR6019 that files Ira Levin in the middle of James Joyce.
+
+A book Open Library never classified — about one in ten, and everything that arrives through the subjects endpoint — is scored on its subjects alone, on the same scale. Treating an unfiled book as though it were filed somewhere else would push exactly the books with the thinnest metadata off the map.
+
+**Length.** Page counts come along in the same response. Length is a poor measure of resemblance, since two three-hundred-page books have nothing in common by virtue of it, so it only ever holds back a pairing that is obviously the wrong size and never creates one: nothing at all until one book is twice the other, and never more than a fifteen per cent penalty however far apart they are. A ninety-six-page mini-comic and a five-hundred-page graphic novel can share every heading they have and still be different objects to someone deciding what to pick up.
 
 **Building a map.** Subtext takes the subjects that make the seed specific, reads what else is filed under each, and ranks what comes back on two things: how much of the seed's subject profile it shares, and how many of those subject lists it turned up in, and how high. Because every candidate arrives with its own subject list, the links *between* candidates cost nothing extra — a recommendation API would need one request per connection. Each dot keeps only its strongest handful of links, which is what separates a map you can read from a ball of yarn.
 
@@ -83,6 +95,7 @@ src/
     cache.js        Memory and IndexedDB cache
   graph/
     subjects.js     Subject cleaning, faceting and weighting — the similarity model
+    classification.js  Library of Congress and Dewey numbers, read for what they mean where
     build.js        Builds book, author, subject, influence and path maps; grows maps from a dot
     analysis.js     Clusters, bridges, paths, farthest dot
     color.js        Spectral colouring
@@ -115,15 +128,16 @@ Neither service is contacted. `test/harness.mjs` answers in the same shapes the 
 - Open Library's cataloguing is uneven. A well-known book has dozens of useful subjects; an obscure one may have three, and a recent one may have none, in which case Subtext says so and suggests mapping the writer instead.
 - Subject headings are phrased in ways nobody guesses — half of comics history sits under `Comic books, strips, etc`. The search box carries a starting vocabulary of headings that do return books, and shows how many books are behind each suggestion.
 - Shared subjects are a real signal but a different one from what readers think goes together. Two books can be catalogued identically and read nothing alike.
+- Call numbers are assigned by people, one edition at a time, and they disagree. Taking the commonest reading throws out the worst of it, but a book with a single odd record is filed by that record.
+- Library of Congress numbers are read as topics outside class P and as authors inside its national literatures. Where the schedule wasn't checked, the ranges err towards reading them as authors, which loses a little signal rather than inventing one.
 - Wikidata's influence coverage is thin outside well-documented writers, and absent for most living ones.
 - Open Library's search can be slow under load. Requests time out after twenty seconds with a message saying so.
 
 ## Next steps
 - **Bugs:** 
     * 
-- Can we use their Library of Congress / Dewey Decimal Class data for better grouping?
-- **Very next:** When clicking on a book or author, have the description much higher up. Right now its all the way down
-- **Next:** Subject maps that show writers as well as books, so a territory can be read either way without switching maps.
+- **Next:** Wikidata genres (P136) as a third opinion on book maps, batched in one query the way influence already is. Measured on a sample: about four books in ten resolve to a Wikidata item at all, and of those about five in six carry a genre — so roughly half of any map, which makes it additive-only, never a penalty for absence. What it buys is a controlled vocabulary that catches what cataloguing misses: Solaris and Dune are both filed as `planetary romance`, and *Frankenstein* as `epistolary novel` and `body horror literature`. No library heading says any of that. Worth judging against real maps before deciding how much weight it earns.
+- **Then:** Subject maps that show writers as well as books, so a territory can be read either way without switching maps.
 - **Then:** Use Open Library's subject facets to suggest where to go next from a subject map — the headings that keep company with the one you're on.
 - **Then:** Influence maps seeded from a book rather than a writer, following the book's author but weighting toward writers working in the same form.
 - **Stretch:** Let a map hold both books and writers at once, with the links between them drawn differently from the links among them. Bigger lift: today's colouring assumes one kind of thing per map.

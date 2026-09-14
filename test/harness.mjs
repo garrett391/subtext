@@ -14,6 +14,9 @@ const WORKS = [
     year: 1986,
     editions: 74,
     subjects: ['Superheroes', 'Comic books, strips, etc', 'Graphic novels', 'Dystopias', 'Vigilantes', 'Fiction'],
+    lcc: ['PN-6737.00000000.M66 W38 1987'],
+    ddc: ['741.5973'],
+    pages: 416,
   },
   {
     key: 'OL2W',
@@ -22,6 +25,9 @@ const WORKS = [
     year: 1988,
     editions: 41,
     subjects: ['Superheroes', 'Comic books, strips, etc', 'Graphic novels', 'Dystopias', 'Anarchism', 'Fiction'],
+    lcc: ['PN-6737.00000000.M66 V33 2005'],
+    ddc: ['741.5973'],
+    pages: 296,
   },
   {
     key: 'OL3W',
@@ -30,6 +36,10 @@ const WORKS = [
     year: 1986,
     editions: 60,
     subjects: ['Comic books, strips, etc', 'Graphic novels', 'Holocaust, Jewish (1939-1945)', 'Biography', 'Nonfiction'],
+    lcc: ['PN-6727.00000000.S6 M3 1986'],
+    ddc: ['741.5973'],
+    pages: 296,
+    people: ['Vladek Spiegelman'],
   },
   {
     key: 'OL4W',
@@ -38,6 +48,9 @@ const WORKS = [
     year: 2000,
     editions: 38,
     subjects: ['Comic books, strips, etc', 'Graphic novels', 'Autobiography', 'Iran', 'Nonfiction'],
+    lcc: ['PN-6747.00000000.S27 P4713 2003'],
+    ddc: ['741.5944'],
+    pages: 153,
   },
   {
     key: 'OL5W',
@@ -46,6 +59,9 @@ const WORKS = [
     year: 1986,
     editions: 33,
     subjects: ['Superheroes', 'Comic books, strips, etc', 'Graphic novels', 'Vigilantes', 'Dystopias', 'Fiction'],
+    lcc: ['PN-6728.00000000.B36 M553 1986'],
+    ddc: ['741.5973'],
+    pages: 224,
   },
   {
     key: 'OL6W',
@@ -54,6 +70,9 @@ const WORKS = [
     year: 2006,
     editions: 21,
     subjects: ['Comic books, strips, etc', 'Graphic novels', 'Autobiography', 'Lesbians', 'Nonfiction'],
+    lcc: ['PN-6727.00000000.B3757 F86 2006'],
+    ddc: ['741.5973'],
+    pages: 232,
   },
   {
     key: 'OL7W',
@@ -62,6 +81,9 @@ const WORKS = [
     year: 1949,
     editions: 220,
     subjects: ['Dystopias', 'Totalitarianism', 'Fiction', 'Science fiction', 'Accessible book', 'Protected DAISY'],
+    lcc: ['PR-6029.00000000.R8 N49 1949'],
+    ddc: ['823.912'],
+    pages: 328,
   },
   {
     key: 'OL8W',
@@ -70,6 +92,9 @@ const WORKS = [
     year: 1932,
     editions: 140,
     subjects: ['Dystopias', 'Science fiction', 'Fiction', 'Totalitarianism'],
+    lcc: ['PR-6015.00000000.U9 B7 1932'],
+    ddc: ['823.912'],
+    pages: 311,
   },
   {
     key: 'OL9W',
@@ -86,6 +111,9 @@ const WORKS = [
     year: 1999,
     editions: 18,
     subjects: ['Comic books, strips, etc', 'Graphic novels', 'Jack, the Ripper', 'Murder', 'Fiction'],
+    lcc: ['PN-6737.00000000.M66 F76 1999'],
+    ddc: ['741.5973'],
+    pages: 572,
   },
 ];
 
@@ -130,6 +158,13 @@ const asDoc = (work) => ({
   subject: work.subjects,
   ratings_average: 4.1,
   ratings_count: 900,
+  // Real search results carry these, in the sortable form Open Library
+  // normalises call numbers into. Works without them stand for the one book in
+  // ten nobody classified.
+  ...(work.lcc ? { lcc: work.lcc } : {}),
+  ...(work.ddc ? { ddc: work.ddc } : {}),
+  ...(work.pages ? { number_of_pages_median: work.pages } : {}),
+  ...(work.people ? { person: work.people } : {}),
 });
 
 const hasSubject = (work, subject) =>

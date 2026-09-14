@@ -21,6 +21,11 @@ const TIMEOUT_MS = 20000;
 // long-tail noise, and keeping them all would bloat the cache for nothing.
 const MAX_SUBJECTS = 48;
 
+// Everything here arrives in the one response, so widening the list costs a few
+// kilobytes and no extra requests. `lcc` and `ddc` are where a book sits in the
+// two classification schemes, which is a hierarchy that subject headings aren't;
+// `person`, `place` and `time` are subject facets the works endpoint files
+// separately and search would otherwise leave behind.
 const SEARCH_FIELDS = [
   'key',
   'title',
@@ -30,8 +35,14 @@ const SEARCH_FIELDS = [
   'cover_i',
   'edition_count',
   'subject',
+  'person',
+  'place',
+  'time',
   'ratings_average',
   'ratings_count',
+  'lcc',
+  'ddc',
+  'number_of_pages_median',
 ].join(',');
 
 export class OpenLibraryError extends Error {
@@ -129,6 +140,13 @@ const subjectsOf = (list) =>
     .filter(Boolean)
     .slice(0, MAX_SUBJECTS);
 
+/** Classification numbers as catalogued, one per edition and often disagreeing. */
+const shelfOf = (doc) => ({
+  lcc: asArray(doc.lcc).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 12),
+  ddc: asArray(doc.ddc).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 12),
+  pages: num(doc.number_of_pages_median) || null,
+});
+
 function bookFromSearchDoc(doc) {
   const authorKeys = asArray(doc.author_key);
   const authorNames = asArray(doc.author_name);
@@ -141,7 +159,11 @@ function bookFromSearchDoc(doc) {
     editions: num(doc.edition_count),
     rating: doc.ratings_average ? Math.round(num(doc.ratings_average) * 10) / 10 : null,
     ratingCount: num(doc.ratings_count),
-    subjects: subjectsOf(doc.subject),
+    // People, places and periods are subjects too, and a book opened by ID gets
+    // them from the works endpoint. Taking them here as well keeps a candidate's
+    // subject list the same shape as the seed it's being compared against.
+    subjects: subjectsOf([...asArray(doc.subject), ...asArray(doc.person), ...asArray(doc.place), ...asArray(doc.time)]),
+    ...shelfOf(doc),
   };
 }
 
@@ -160,6 +182,12 @@ function bookFromSubjectWork(work) {
     rating: null,
     ratingCount: 0,
     subjects: subjectsOf(work.subject),
+    // This endpoint carries no classification numbers. Books that arrive
+    // through it simply go unshelved, which scoring treats as "unknown" rather
+    // than as "filed somewhere else".
+    lcc: [],
+    ddc: [],
+    pages: null,
   };
 }
 
@@ -291,6 +319,10 @@ export function bookByKey(key) {
       rating: fromSearch?.rating ?? null,
       ratingCount: fromSearch?.ratingCount ?? 0,
       subjects: subjects.length ? subjects : fromSearch?.subjects || [],
+      // The works endpoint has no call numbers; the search alongside it does.
+      lcc: fromSearch?.lcc || [],
+      ddc: fromSearch?.ddc || [],
+      pages: fromSearch?.pages ?? null,
       description: textOf(work.description),
       links: asArray(work.links)
         .map((l) => ({ title: String(l.title || 'Link'), url: String(l.url || '') }))
@@ -397,6 +429,9 @@ export function authorWorks(key, limit = 50) {
           rating: null,
           ratingCount: 0,
           subjects: subjectsOf(entry.subjects),
+          lcc: [],
+          ddc: [],
+          pages: null,
         }))
         .filter((b) => b.key);
     }

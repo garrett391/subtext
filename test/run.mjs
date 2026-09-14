@@ -13,6 +13,13 @@ const {
 } = await import('../src/graph/subjects.js');
 
 const {
+  parseLcc,
+  parseShelf,
+  shelfAgreement,
+  lengthFactor,
+} = await import('../src/graph/classification.js');
+
+const {
   buildBookMap,
   buildAuthorMap,
   buildSubjectMap,
@@ -21,6 +28,7 @@ const {
   expandNode,
   relatedBooks,
   connectionBetween,
+  authorDamping,
   bookId,
   authorId,
 } = await import('../src/graph/build.js');
@@ -69,6 +77,32 @@ await test('similar books score above unrelated ones', () => {
   assert.equal(far, 0);
 });
 
+await test("an uploader's namespace comes off a heading", () => {
+  // "genre:high fantasy" is a private tag on 98 works; "high fantasy" is the
+  // heading on nearly nine hundred.
+  assert.equal(normalizeSubject('genre:high fantasy'), 'high fantasy');
+  assert.equal(normalizeSubject('form:novel'), 'novel');
+  assert.equal(normalizeSubject('collection:favourites'), '');
+  assert.equal(normalizeSubject('series:A_Court_of_Thorns_and_Roses'), 'series:a court of thorns and roses');
+  const picks = distinctiveSubjects(['genre:high fantasy', 'Thieves'], null, 4);
+  assert.equal(picks.find((p) => p.key === 'high fantasy').subject, 'high fantasy');
+});
+
+await test('a series heading counts towards similarity but is never searched', () => {
+  const a = vectorOf(['series:The Mistborn Saga', 'Magic'], null);
+  const b = vectorOf(['series:The Mistborn Saga', 'Thieves'], null);
+  assert.ok(similarity(a, b, normOf(a), normOf(b)) > 0, 'sharing a series should link two books');
+  const picks = distinctiveSubjects(['series:The Mistborn Saga', 'Courts and courtiers'], null, 4).map((p) => p.key);
+  assert.deepEqual(picks, ['courts and courtiers']);
+});
+
+await test('a long series under one heading is damped after its second volume', () => {
+  assert.equal(authorDamping(1), 1);
+  assert.equal(authorDamping(2), 1);
+  assert.ok(authorDamping(3) < 1);
+  assert.ok(authorDamping(28) < 0.1, 'the twenty-eighth volume should count for almost nothing');
+});
+
 await test('distinctive subjects drop restatements of each other', () => {
   const picks = distinctiveSubjects(
     ['Superheroes', 'Superheroes -- Comic books', 'Fiction', 'Dystopias'],
@@ -77,6 +111,95 @@ await test('distinctive subjects drop restatements of each other', () => {
   ).map((p) => p.key);
   assert.ok(picks.includes('dystopias'));
   assert.equal(picks.filter((p) => p.includes('superheroes')).length, 1);
+});
+
+console.log('\nShelves');
+
+await test('reads a call number into class, number and author', () => {
+  const mistborn = parseLcc('PS-3619.00000000.A533 M57 2006');
+  assert.equal(mistborn.subclass, 'PS');
+  assert.equal(mistborn.root, 'P');
+  assert.equal(mistborn.number, 3619);
+  assert.equal(mistborn.cutter, 'A533');
+  // PS3600-3626 is "individual authors who began publishing in 2001 or later",
+  // numbered by surname initial. The number is a person, not a subject.
+  assert.equal(mistborn.biographical, true);
+  assert.equal(mistborn.period, '2001-');
+});
+
+await test('a number nobody assigned reads as no number at all', () => {
+  assert.equal(parseLcc('LC-0000.000000'), null);
+  assert.equal(parseLcc(''), null);
+});
+
+await test('proximity counts in a topical range but not in an author range', () => {
+  const comics = (n) => parseShelf([`PN-${n}.00000000`], null);
+  const american = (n) => parseShelf([`PS-${n}.00000000`], null);
+  // PN6727 and PN6737 are ten apart and both comics.
+  const near = shelfAgreement(comics('6727'), comics('6737'));
+  const far = shelfAgreement(comics('6072'), comics('6737'));
+  assert.ok(near > 0.9, `neighbouring comics scored ${near.toFixed(2)}`);
+  assert.ok(far < 0.45, `distant classes scored ${far.toFixed(2)}`);
+
+  // PS3551 and PS3569 are eighteen apart, which is the distance from A to S.
+  // Asimov and Simmons are not eighteen units of anything apart.
+  const asimov = shelfAgreement(american('3551'), american('3569'));
+  const sanderson = shelfAgreement(american('3551'), american('3619'));
+  assert.ok(asimov < near, 'an author range was scored as though it were topical');
+  // Same literature and the same generation of it still beats a later one.
+  assert.ok(asimov > sanderson, `${asimov.toFixed(2)} should beat ${sanderson.toFixed(2)}`);
+});
+
+await test('separates a novel from a work of theory on the same subject', () => {
+  // Both are catalogued under "feminism"; only the call number knows that one
+  // of them is fiction.
+  const stepfordWives = parseShelf(['PS-3523.00000000.E793 S8'], ['813.54']);
+  const theory = parseShelf(['HQ-1154.00000000.F79'], ['305.42']);
+  assert.equal(shelfAgreement(stepfordWives, theory), 0);
+});
+
+await test('an unclassified book is unknown rather than badly filed', () => {
+  const shelved = parseShelf(['PN-6737.00000000'], ['741.5973']);
+  assert.equal(parseShelf([], []), null);
+  assert.equal(shelfAgreement(null, shelved), null);
+});
+
+await test('picks the commonest call number out of a pile of editions', () => {
+  const watchmen = parseShelf(
+    ['PN-6728.00000000.W3 M821 1987', 'PN-6738.00000000', 'PN-6737.00000000.M66 W38 1987', 'PN-6737.00000000.M66W38 2005'],
+    ['741.5941', '741.5', '741.5942', '741.5973'],
+  );
+  assert.equal(watchmen.lcc.number, 6737);
+  // Where the libraries disagree past 741.5, 741.5 is what they agree on.
+  assert.equal(watchmen.ddc.digits, '7415');
+});
+
+await test('prefers the more specific Dewey number when nothing else separates them', () => {
+  // The Stepford Wives is filed at both 813.54 and 810, once each.
+  assert.equal(parseShelf([], ['813.54', '810']).ddc.digits, '81354');
+  assert.equal(parseShelf([], ['810', '813.54']).ddc.digits, '81354');
+});
+
+await test('drops a single stray call number in favour of the majority', () => {
+  // The real record for The Stepford Wives carries eight PS3523s, four PZ4s and
+  // one PR6019 — Ira Levin filed, once, in the middle of James Joyce.
+  const stepfordWives = parseShelf(
+    [
+      'PS-3523.00000000.E7993 S73 2004', 'PS-3523.00000000.E7993', 'PS-3523.00000000.E7993 St3',
+      'PS-3523.00000000.E7993 St4', 'PS-3523.00000000.E7993 St', 'PZ-0004.00000000.L664 St4',
+      'PZ-0004.00000000.L664', 'PR-6019.00000000.O9',
+    ],
+    ['813.54'],
+  );
+  assert.equal(stepfordWives.lcc.subclass, 'PS');
+  assert.equal(stepfordWives.lcc.number, 3523);
+});
+
+await test('length holds back a mismatch but never invents a match', () => {
+  assert.equal(lengthFactor(240, 280), 1);
+  assert.equal(lengthFactor(300, 0), 1, 'a missing page count must not penalise');
+  assert.ok(lengthFactor(96, 587) < 0.9, 'a mini-comic and a long graphic novel are different objects');
+  assert.ok(lengthFactor(96, 587) > 0.8, 'length must stay a nudge, not a verdict');
 });
 
 console.log('\nBook maps');
@@ -99,6 +222,33 @@ await test('ranks the closest book highest', () => {
   assert.ok(
     ['V for Vendetta', 'The Dark Knight Returns'].includes(ranked[0].label),
     `top match was ${ranked[0].label}`,
+  );
+});
+
+await test('a book carries its shelf and its length onto the map', () => {
+  const watchmen = bookMap.graph.getNodeAttributes(bookId('OL1W'));
+  assert.equal(watchmen.shelf.lcc.subclass, 'PN');
+  assert.equal(watchmen.pages, 416);
+  // Jimmy Corrigan has no call number in the fixture, and still made the map.
+  const unshelved = bookMap.graph.getNodeAttributes(bookId('OL9W'));
+  assert.equal(unshelved.shelf, null);
+  assert.ok(unshelved.score > 0, 'an unclassified book was scored out of existence');
+});
+
+await test('the shelf separates the comics from the prose novels', () => {
+  // Watchmen, 1984 and Brave New World all share "Dystopias" and "Fiction", so
+  // subjects alone put the two novels close to the comic. PN against PR says
+  // one of these is not like the others.
+  const link = (a, b) => {
+    const edge = bookMap.graph.edge(bookId(a), bookId(b));
+    return edge ? bookMap.graph.getEdgeAttribute(edge, 'weight') : 0;
+  };
+  const novelToNovel = link('OL7W', 'OL8W');
+  const comicToNovel = link('OL1W', 'OL7W');
+  assert.ok(novelToNovel > 0, '1984 and Brave New World should be linked');
+  assert.ok(
+    novelToNovel > comicToNovel,
+    `two dystopian novels (${novelToNovel.toFixed(2)}) should sit closer than a novel and a comic (${comicToNovel.toFixed(2)})`,
   );
 });
 

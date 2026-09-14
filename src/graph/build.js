@@ -11,6 +11,7 @@ import {
   normalizeSubject,
   facetWeight,
 } from './subjects.js';
+import { parseShelf, shelfAgreement, lengthFactor } from './classification.js';
 
 // Thrown when a newer search replaces the one in progress.
 export class StaleError extends Error {}
@@ -43,6 +44,30 @@ const MAX_LINKS_PER_NODE = 6;
 const MIN_LINK = 0.15;
 const SAME_AUTHOR_LINK = 0.42;
 
+/**
+ * How much of a book-to-book score is where the two books are shelved rather
+ * than what they're catalogued under. Kept modest: cataloguing is uneven enough
+ * that a call number is a second opinion, not a verdict.
+ */
+const SHELF_WEIGHT = 0.22;
+
+/**
+ * Folds the shelf and the page count into a score already computed from
+ * subjects.
+ *
+ * The important part is what happens when a book has no call number, which is
+ * about one in ten, and every book that arrived through the subjects endpoint.
+ * The shelf term isn't zeroed — it's dropped, and the subject score is left to
+ * stand on its own scale. Scoring an unclassified book as though it had been
+ * filed somewhere else would push exactly the books with the thinnest metadata
+ * off the map, which is the opposite of what the signal is for.
+ */
+function withShelf(base, a, b) {
+  const agreement = shelfAgreement(a?.shelf, b?.shelf);
+  const blended = agreement == null ? base : (1 - SHELF_WEIGHT) * base + SHELF_WEIGHT * agreement;
+  return blended * lengthFactor(a?.pages, b?.pages);
+}
+
 function bookNode(book, score, hop, extra = {}) {
   const vector = vectorOf(book.subjects, subjectCounts);
   return {
@@ -56,6 +81,8 @@ function bookNode(book, score, hop, extra = {}) {
     editions: book.editions ?? 0,
     rating: book.rating ?? null,
     subjects: book.subjects || [],
+    shelf: parseShelf(book.lcc, book.ddc),
+    pages: book.pages ?? null,
     vector,
     norm: normOf(vector),
     score,
@@ -97,6 +124,10 @@ function upsertNode(g, id, attrs) {
     norm: (attrs.vector?.size ?? 0) > (current.vector?.size ?? 0) ? attrs.norm : current.norm,
     coverId: current.coverId ?? attrs.coverId ?? null,
     byline: current.byline || attrs.byline || '',
+    // A book first seen through the subjects endpoint arrives unshelved; if it
+    // turns up again from search, that's where the call numbers come from.
+    shelf: current.shelf ?? attrs.shelf ?? null,
+    pages: current.pages ?? attrs.pages ?? null,
   });
   return false;
 }
@@ -132,6 +163,8 @@ function weave(g, { maxLinks = MAX_LINKS_PER_NODE, minLink = MIN_LINK, skipSeedP
     vector: attrs.vector,
     norm: attrs.norm,
     authors: attrs.authors,
+    shelf: attrs.shelf,
+    pages: attrs.pages,
     seed: attrs.seed,
   }));
 
@@ -140,7 +173,9 @@ function weave(g, { maxLinks = MAX_LINKS_PER_NODE, minLink = MIN_LINK, skipSeedP
     for (const other of nodes) {
       if (other.id === node.id) continue;
       if (skipSeedPairs && other.seed) continue; // The seed is already linked to everything.
-      let weight = similarity(node.vector, other.vector, node.norm, other.norm);
+      // Author nodes carry no shelf, so this falls through to the subject
+      // score untouched on author and influence maps.
+      let weight = withShelf(similarity(node.vector, other.vector, node.norm, other.norm), node, other);
       if (sharesAuthor(node, other)) weight = Math.max(weight, SAME_AUTHOR_LINK);
       if (weight >= minLink) scored.push({ id: other.id, weight });
     }
@@ -208,16 +243,39 @@ async function gatherBySubjects(picks, ctx, { perSubject = 40, verb = 'Reading' 
 const rankFactor = (index, length) => 0.55 + 0.45 * (1 - index / Math.max(1, length));
 
 /**
+ * A long-running series is catalogued one volume at a time, every volume with
+ * the same headings, so a single manga can take twenty-eight of the forty
+ * places under a heading and drown everything else that shares it. The first
+ * two books by one writer under one heading count in full; from the third on,
+ * each counts for less than the last. Across headings nothing is damped — a
+ * writer who turns up under five of the seed's subjects has earned it.
+ */
+export const authorDamping = (nth) => (nth <= 2 ? 1 : 2 / nth);
+
+/** Counts how many times each writer has appeared so far in one list. */
+function dampingFor(book, seenAuthors) {
+  let factor = 1;
+  for (const author of book.authors || []) {
+    if (!author.key) continue;
+    const nth = (seenAuthors.get(author.key) || 0) + 1;
+    seenAuthors.set(author.key, nth);
+    factor = Math.min(factor, authorDamping(nth));
+  }
+  return factor;
+}
+
+/**
  * Collects every book that turned up under any of the subjects searched, and
  * scores it on how many of them it appeared under and how high.
  */
 function tallyBooks(lists, { exclude = new Set() } = {}) {
   const tally = new Map();
   for (const list of lists) {
+    const seenAuthors = new Map();
     list.books.forEach((book, index) => {
       if (exclude.has(book.key)) return;
       const entry = tally.get(book.key) || { book, weight: 0, matches: 0, subjects: [] };
-      entry.weight += list.weight * rankFactor(index, list.books.length);
+      entry.weight += list.weight * rankFactor(index, list.books.length) * dampingFor(book, seenAuthors);
       entry.matches += 1;
       entry.subjects.push(list.subject);
       // A fuller record wins: search results vary in how much they carry.
@@ -278,12 +336,15 @@ export async function buildBookMap(key, ctx) {
   const tally = tallyBooks(lists, { exclude: new Set([seed.key]) });
   const topWeight = Math.max(...[...tally.values()].map((e) => e.weight), 0.001);
 
+  const seedShelf = { shelf: parseShelf(seed.lcc, seed.ddc), pages: seed.pages ?? null };
+
   const ranked = [...tally.values()]
     .map((entry) => {
       const vector = vectorOf(entry.book.subjects, subjectCounts);
       const overlap = similarity(seedVector, vector, seedNorm, normOf(vector));
       const spread = entry.weight / topWeight;
-      let score = 0.62 * overlap + 0.38 * spread;
+      const candidate = { shelf: parseShelf(entry.book.lcc, entry.book.ddc), pages: entry.book.pages ?? null };
+      let score = withShelf(0.62 * overlap + 0.38 * spread, seedShelf, candidate);
       // Another book by the same hand belongs on the map even when the
       // cataloguing doesn't quite agree.
       if (sharesAuthor(seed, entry.book)) score = Math.max(score, 0.55);
@@ -371,8 +432,11 @@ export async function buildAuthorMap(key, ctx) {
   // their books put them on this map.
   const tally = new Map();
   for (const list of lists) {
+    // A writer's twenty-eighth volume under a heading says no more about them
+    // than their second did.
+    const seenAuthors = new Map();
     list.books.forEach((book, index) => {
-      const factor = list.weight * rankFactor(index, list.books.length);
+      const factor = list.weight * rankFactor(index, list.books.length) * dampingFor(book, seenAuthors);
       for (const person of book.authors || []) {
         if (!person.key || person.key === author.key || !person.name) continue;
         const entry = tally.get(person.key) || {
@@ -691,6 +755,9 @@ export async function relatedBooks(book, ctx, { subjects = 3, perSubject = 30, l
 
   const vector = book.vector || vectorOf(book.subjects, subjectCounts);
   const norm = book.norm || normOf(vector);
+  // A node on the map already carries its shelf; a book handed in from
+  // elsewhere still has the raw call numbers.
+  const from = { shelf: book.shelf ?? parseShelf(book.lcc, book.ddc), pages: book.pages ?? null };
   const tally = tallyBooks(lists, { exclude: new Set([book.key]) });
   const topWeight = Math.max(...[...tally.values()].map((e) => e.weight), 0.001);
 
@@ -698,7 +765,8 @@ export async function relatedBooks(book, ctx, { subjects = 3, perSubject = 30, l
     .map((entry) => {
       const other = vectorOf(entry.book.subjects, subjectCounts);
       const overlap = similarity(vector, other, norm, normOf(other));
-      return { book: entry.book, score: 0.62 * overlap + 0.38 * (entry.weight / topWeight) };
+      const to = { shelf: parseShelf(entry.book.lcc, entry.book.ddc), pages: entry.book.pages ?? null };
+      return { book: entry.book, score: withShelf(0.62 * overlap + 0.38 * (entry.weight / topWeight), from, to) };
     })
     .sort((a, b) => b.score - a.score || b.book.editions - a.book.editions)
     .slice(0, limit);
@@ -876,6 +944,10 @@ async function neighboursOf(book, ctx) {
 
   const vector = book.vector || vectorOf(book.subjects, subjectCounts);
   const norm = book.norm || normOf(vector);
+  // A route is only as smooth as the links it follows, so a step is measured
+  // the same way a link on a map is: a path shouldn't cross from a graphic
+  // novel to a work of theory on the strength of one shared heading.
+  const from = { shelf: book.shelf ?? parseShelf(book.lcc, book.ddc), pages: book.pages ?? null };
   const seen = new Map();
 
   for (const list of lists) {
@@ -883,7 +955,8 @@ async function neighboursOf(book, ctx) {
     for (const candidate of list.books) {
       if (candidate.key === book.key || kept >= PATH_KEEP_PER_SUBJECT) continue;
       const other = vectorOf(candidate.subjects, subjectCounts);
-      const weight = similarity(vector, other, norm, normOf(other));
+      const to = { shelf: parseShelf(candidate.lcc, candidate.ddc), pages: candidate.pages ?? null };
+      const weight = withShelf(similarity(vector, other, norm, normOf(other)), from, to);
       const existing = seen.get(candidate.key);
       if (!existing || weight > existing.weight) seen.set(candidate.key, { book: candidate, weight });
       kept += 1;
