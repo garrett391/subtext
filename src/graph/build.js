@@ -44,23 +44,16 @@ const MAX_LINKS_PER_NODE = 6;
 const MIN_LINK = 0.15;
 const SAME_AUTHOR_LINK = 0.42;
 
-/**
- * How much of a book-to-book score is where the two books are shelved rather
- * than what they're catalogued under. Kept modest: cataloguing is uneven enough
- * that a call number is a second opinion, not a verdict.
- */
+// Kept modest: cataloguing is uneven enough that a call number is a second
+// opinion, not a verdict.
 const SHELF_WEIGHT = 0.22;
 
 /**
- * Folds the shelf and the page count into a score already computed from
- * subjects.
- *
- * The important part is what happens when a book has no call number, which is
- * about one in ten, and every book that arrived through the subjects endpoint.
- * The shelf term isn't zeroed — it's dropped, and the subject score is left to
- * stand on its own scale. Scoring an unclassified book as though it had been
- * filed somewhere else would push exactly the books with the thinnest metadata
- * off the map, which is the opposite of what the signal is for.
+ * Folds shelf and length into a score already computed from subjects. When a
+ * book has no call number — about one in ten, and everything from the subjects
+ * endpoint — the shelf term is dropped rather than zeroed, leaving the subject
+ * score on its own scale. Zeroing would push exactly the books with the
+ * thinnest metadata off the map.
  */
 function withShelf(base, a, b) {
   const agreement = shelfAgreement(a?.shelf, b?.shelf);
@@ -243,12 +236,10 @@ async function gatherBySubjects(picks, ctx, { perSubject = 40, verb = 'Reading' 
 const rankFactor = (index, length) => 0.55 + 0.45 * (1 - index / Math.max(1, length));
 
 /**
- * A long-running series is catalogued one volume at a time, every volume with
- * the same headings, so a single manga can take twenty-eight of the forty
- * places under a heading and drown everything else that shares it. The first
- * two books by one writer under one heading count in full; from the third on,
- * each counts for less than the last. Across headings nothing is damped — a
- * writer who turns up under five of the seed's subjects has earned it.
+ * A long series is catalogued a volume at a time with the same headings on
+ * each, so one manga can take twenty-eight of the forty places under a heading.
+ * A writer's first two count in full, then each counts for less than the last.
+ * Only within one list: turning up under five of the seed's subjects is earned.
  */
 export const authorDamping = (nth) => (nth <= 2 ? 1 : 2 / nth);
 

@@ -1,32 +1,18 @@
 /**
- * Two classification schemes ride along with every Open Library search result:
- * the Library of Congress call number and the Dewey Decimal number. They say
- * something subject headings can't, because they are hierarchies. A heading is
- * a flat label — "feminism" is filed on the theory and on the novel alike —
- * where a call number puts the theory at HQ1154 and the novel at PS3523, on
- * different floors of the building.
+ * Call numbers ride along free with every search result, and unlike a subject
+ * heading they're a hierarchy: "feminism" is stamped on the theory and on the
+ * novel alike, where HQ1154 and PS3523 are different floors of the building.
  *
- * What a call number means, though, depends on where in the scheme it sits, and
- * reading it wrong is worse than not reading it at all.
- *
- * In most classes the number is the topic. HQ1154 and HQ1190 are both women's
- * studies; PN6727 and PN6737 are both comics. Numbers that sit near each other
- * are about things that sit near each other, which is the whole idea of a shelf.
- *
- * Class P — Language and Literature — is the exception, and it is the class
- * most fiction lands in. Inside its national literatures the big ranges are
- * "individual authors", where the number comes from the author's period and the
- * first letter of their surname rather than from anything about the book.
- * Mistborn is PS3619.A533: PS is American literature, 3619 is "began publishing
- * in 2001 or later, surname begins with S", and .A533 is the cutter for
- * "anderson". Nothing in it is a subject, and the next number along is the next
- * letter of the alphabet. Asimov is A, so he sits at PS3501 and PS3551; Simmons
- * is S and lands on PS3569; Sanderson, publishing forty years later, on PS3619.
- *
- * So proximity has to be switched off in those ranges. What survives is worth
- * having on its own: the range itself dates the author, which puts
- * contemporaries together — something neither subject headings nor a
- * publication year can do, since a year is contaminated by every reprint.
+ * What a number means depends on where in the scheme it sits. In most classes
+ * it's the topic, so numbers near each other are about things near each other —
+ * HQ1154 and HQ1190 are both women's studies. Class P, Language and Literature,
+ * is the exception, and it's where most fiction lands: inside its national
+ * literatures the big ranges are "individual authors", numbered by the author's
+ * period and surname initial. Mistborn is PS3619.A533 — American literature,
+ * "began publishing 2001 or later, surname S", cutter for "anderson". The next
+ * number along is the next letter of the alphabet, so proximity is meaningless
+ * there and is switched off. The period survives, and puts contemporaries
+ * together in a way a publication year can't, being full of reprints.
  */
 
 // Open Library hands these over in a sortable normal form: one to three class
@@ -35,13 +21,11 @@
 const LCC_PATTERN = /^([A-Z]{1,3})-*(\d+)(?:\.(\d+))?(?:\.(.+))?$/;
 
 /**
- * The "individual authors" ranges, where the number is a person rather than a
- * subject. Erring wide here is safe: marking a topical range biographical costs
- * a little precision, where the reverse invents a resemblance out of two
- * surnames happening to start with the same letter.
- *
- * Periods are recorded only for the two schedules this was checked against.
- * Elsewhere the range still suppresses proximity but claims no date.
+ * The "individual authors" ranges, where the number is a person. Erring wide is
+ * safe: calling a topical range biographical loses a little signal, where the
+ * reverse invents resemblance out of two surnames sharing a letter. Periods are
+ * recorded only for the two schedules this was checked against; elsewhere the
+ * range suppresses proximity but claims no date.
  */
 const AUTHOR_RANGES = {
   PS: [
@@ -85,8 +69,8 @@ export function parseLcc(raw) {
     subclass,
     root: subclass[0], // P, H, Q — the floor of the library.
     number,
-    // The first cutter is the author. Two books agreeing all the way down to it
-    // are by the same hand, whatever the catalogue says about the author's ID.
+    // The first cutter is the author, so two books agreeing down to it are by
+    // the same hand whatever the catalogue says about the author's ID.
     cutter: (cutters || '').trim().split(/\s+/)[0] || '',
     biographical,
     period,
@@ -102,10 +86,9 @@ export function parseDdc(raw) {
 }
 
 /**
- * A book carries a call number for every edition anyone catalogued, and they
- * disagree. Watchmen has fourteen, most of them PN6737 and a couple that
- * wandered. Taking the commonest class, then the commonest number inside it,
- * drops the strays without dropping the specificity.
+ * A book carries a call number per catalogued edition, and they disagree —
+ * Watchmen has fourteen. The commonest class, then the commonest number inside
+ * it, drops the strays without dropping the specificity.
  */
 function pickLcc(list) {
   const parsed = (list || []).map(parseLcc).filter(Boolean);
@@ -123,17 +106,11 @@ function pickLcc(list) {
 }
 
 /**
- * Dewey the same way, with two differences.
- *
- * Where two bases are equally popular the more specific one wins. The Stepford
- * Wives is filed at both "813.54" and "810" — American fiction of a period, and
- * American literature at large — and the cataloguer who wrote the longer number
- * said more than the one who wrote the shorter.
- *
- * Within a base the shorter number wins instead, because there the numbers are
- * refinements of each other and the short one is what they agree on. Watchmen
- * is 741.5941, 741.5942, 741.5973 and 741.5 depending on who catalogued it —
- * French comics, Belgian, American — and 741.5 is the part that isn't a guess.
+ * Dewey the same way, but specificity breaks a tie between bases and loses
+ * inside one. The Stepford Wives is filed at both 813.54 and 810, once each,
+ * and the longer number said more. Watchmen is 741.5941, 741.5942, 741.5973 and
+ * 741.5 — French comics, Belgian, American — where 741.5 is the part that
+ * isn't a guess.
  */
 function pickDdc(list) {
   const parsed = (list || []).map(parseDdc).filter(Boolean);
@@ -163,21 +140,18 @@ const SAME_SUBCLASS = 0.35;
 
 function lccAgreement(a, b) {
   if (!a || !b) return null;
-  // PS against HQ: a novel and a work of theory about the same thing. This is
-  // the distinction subject headings cannot make, so it is made sharply.
+  // PS against HQ: a novel and a work of theory about the same thing, which is
+  // the distinction subject headings can't make, so it's made sharply.
   if (a.root !== b.root) return 0;
-  // PS against PR: both literature, different national tradition.
-  if (a.subclass !== b.subclass) return SAME_SUBCLASS;
+  if (a.subclass !== b.subclass) return SAME_SUBCLASS; // Both literature, different tradition.
   if (a.cutter && a.cutter === b.cutter && a.number === b.number) return 0.95;
 
   if (a.biographical || b.biographical) {
-    // One of the pair sits in an author range and the other doesn't, so the
-    // numbers aren't measuring the same thing and can't be compared.
+    // Only one side is in an author range, so the numbers aren't measuring the
+    // same thing and can't be compared.
     if (!a.biographical || !b.biographical) return 0.55;
-    // Same literature, and the same generation of it.
     return a.period && a.period === b.period ? 0.72 : 0.55;
   }
-  // A topical range, where distance along the shelf is distance between subjects.
   return SAME_SUBCLASS + 0.6 * Math.exp(-Math.abs(a.number - b.number) / 250);
 }
 
@@ -192,8 +166,8 @@ function ddcAgreement(a, b) {
 
 /**
  * How much two books agree about where they belong, 0 to 1, or null when
- * neither was classified. Null matters: a book Open Library never filed must
- * not be scored as though it had been filed somewhere else.
+ * neither was classified — a book nobody filed must not be scored as though it
+ * had been filed somewhere else.
  */
 export function shelfAgreement(a, b) {
   const left = lccAgreement(a?.lcc, b?.lcc);
@@ -206,18 +180,16 @@ export function shelfAgreement(a, b) {
   return 0.6 * left + 0.4 * right;
 }
 
-// Length is a poor measure of resemblance — two three-hundred-page books have
-// nothing in common by virtue of it — so it only ever holds back a pairing that
-// is obviously the wrong size, and never creates one. Nothing at all until one
-// book is twice the other, and never more than this however far apart they are.
 const MAX_LENGTH_PENALTY = 0.15;
 const FREE_RATIO = Math.log(2);
 const FULL_RATIO = Math.log(6);
 
 /**
- * A multiplier for a pair of page counts. A ninety-six-page mini-comic and a
- * five-hundred-page graphic novel can share every heading they have and still
- * be different objects to a reader deciding what to pick up.
+ * Length is poor evidence of resemblance — two three-hundred-page books have
+ * nothing in common by virtue of it — so this only ever holds back a pairing
+ * that is obviously the wrong size, and never creates one. A ninety-six-page
+ * mini-comic and a five-hundred-page graphic novel can share every heading they
+ * have and still be different objects to someone deciding what to pick up.
  */
 export function lengthFactor(a, b) {
   if (!(a > 0) || !(b > 0)) return 1;
