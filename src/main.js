@@ -299,7 +299,7 @@ async function resolveRoute(route) {
     const genre = await wd.genreByName(route.query);
     if (!genre) {
       throw new EmptyMapError(
-        `Wikidata has no genre called “${route.query}”. Open any book and pick a genre from the line under its subjects.`,
+        `Wikidata has no genre called “${route.query}”. Open any book and pick one of its Wikidata genres.`,
       );
     }
     return { type: 'genre', qid: genre.qid };
@@ -483,7 +483,7 @@ function genreMatch(node) {
   const label = app.seedLabel || 'this genre';
   const n = node.sitelinks || 0;
   if (!n) return `Wikidata files it as ${label}.`;
-  return `Wikidata files it as ${label}, with an article on ${n === 1 ? 'one Wikipedia' : `${n} Wikipedias`}.`;
+  return `Wikidata files it as ${label}. Wikipedia covers it in ${n === 1 ? 'one language' : `${n} languages`}.`;
 }
 
 function subjectMatch(node) {
@@ -584,7 +584,7 @@ function overviewNote() {
     const { known = 0, truncated = false, drawn = 0 } = app.genre || {};
     const count = `${truncated ? 'At least ' : ''}${known.toLocaleString('en')} ${known === 1 ? 'book' : 'books'}`;
     const which = drawn < known ? `The ${drawn} best known are drawn.` : 'All of them are drawn.';
-    return `${count} on Wikidata carry this genre and an Open Library record. ${which} Bigger dots have articles on more Wikipedias. Lines join books catalogued alike.`;
+    return `${count} on Wikidata carry this genre and an Open Library record. ${which} Bigger dots are books Wikipedia covers in more languages. Lines join books catalogued alike.`;
   }
   if (app.route.type === 'influence') {
     return 'Arrows run from the writer who influenced to the writer who was influenced. Earlier generations sit to the left. These are editorial claims on Wikidata, not measurements — read them as arguments.';
@@ -638,7 +638,7 @@ function rankedList() {
 
   const hints = {
     subject: 'Strongest answers to your subjects first.',
-    genre: 'Most widely known first, by how many Wikipedias have an article on it.',
+    genre: 'Most widely known first, by how many languages Wikipedia covers it in.',
     influence: 'The writers the most lines run through, first.',
   };
   return {

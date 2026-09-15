@@ -27,26 +27,38 @@ export function createPanel(root, actions) {
 
   const skeletonList = () => h('div', { class: 'skeleton', 'aria-hidden': 'true' }, h('span'), h('span'), h('span'));
 
-  const subjectList = (subjects) => {
-    const picks = distinctiveSubjects(subjects, null, 8);
-    return picks.length
+  /**
+   * A row of pills under a small heading. Subjects and genres are the same
+   * kind of thing — labels a book can be mapped by — so they share one shape,
+   * with the heading saying whose labels they are.
+   */
+  const tagGroup = (heading, pills, className = '') =>
+    pills.length
       ? h(
           'div',
-          { class: 'tag-list' },
-          picks.map((pick) =>
-            h(
-              'button',
-              {
-                type: 'button',
-                class: 'tag',
-                title: `Map everything filed under “${pick.subject}”`,
-                onClick: () => actions.exploreSubject(pick.subject),
-              },
-              titleCaseSubject(pick.subject),
-            ),
-          ),
+          { class: `tag-group ${className}`.trim() },
+          h('h3', { text: heading }),
+          h('div', { class: 'tag-list' }, pills),
         )
       : null;
+
+  const subjectList = (subjects) => {
+    const picks = distinctiveSubjects(subjects, null, 8);
+    return tagGroup(
+      'Open Library subjects',
+      picks.map((pick) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'tag',
+            title: `Map everything filed under “${pick.subject}”`,
+            onClick: () => actions.exploreSubject(pick.subject),
+          },
+          titleCaseSubject(pick.subject),
+        ),
+      ),
+    );
   };
 
   const externalLink = (url, label) =>
@@ -339,7 +351,7 @@ export function createPanel(root, actions) {
   }
 
   /**
-   * Wikidata's genres for a book, in a line under the subject headings. They're
+   * Wikidata's genres for a book, as pills under the subject headings. They're
    * a controlled vocabulary where the headings are whatever a cataloguer typed,
    * so this is often the most exact thing said about a book anywhere on the
    * panel. Absent quietly for the half of books Wikidata doesn't know.
@@ -353,28 +365,23 @@ export function createPanel(root, actions) {
         return;
       }
       // Each genre is the way into a map of everything filed under it — a
-      // subject map from a vocabulary no library has.
-      const named = picks.map((genre) =>
+      // subject map from a vocabulary no library has. One without an ID is
+      // still worth showing, just not worth a click.
+      const pills = picks.map((genre) =>
         genre.qid
           ? h(
               'button',
               {
                 type: 'button',
-                class: 'inline-link',
+                class: 'tag',
                 title: `Map everything Wikidata files as “${genre.label}”`,
                 onClick: () => actions.exploreGenre(genre),
               },
               genre.label,
             )
-          : h('span', { text: genre.label }),
+          : h('span', { class: 'tag tag-static', text: genre.label }),
       );
-      // Intl.ListFormat joins strings, not elements, so the commas go in by hand.
-      const joined = named.flatMap((el, i) => {
-        if (i === 0) return [el];
-        const last = i === named.length - 1;
-        return [last ? (named.length > 2 ? ', and ' : ' and ') : ', ', el];
-      });
-      slot.replaceWith(h('p', { class: 'hint genres' }, 'Wikidata files it as ', ...joined, '.'));
+      slot.replaceWith(tagGroup('Wikidata genres', pills, 'genres'));
     };
     if (node.genres?.length) {
       render(node.genres);

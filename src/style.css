@@ -664,11 +664,23 @@ svg.map.picking .node {
   color: var(--faint);
 }
 
+.tag-group {
+  margin-top: 16px;
+}
+
+.tag-group h3 {
+  margin: 0 0 6px;
+  color: var(--mist);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .tag-list {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 16px;
 }
 
 .tag {
@@ -685,6 +697,16 @@ svg.map.picking .node {
 .tag:hover {
   border-color: var(--line-focus);
   background: rgba(255, 255, 255, 0.04);
+}
+
+.tag-static {
+  color: var(--mist);
+  cursor: default;
+}
+
+.tag-static:hover {
+  border-color: var(--line-strong);
+  background: transparent;
 }
 
 .actions {

@@ -61,14 +61,18 @@ await test('selecting a dot shows the book, its subjects and its neighbours', as
   assert.match(text(), /subject overlap with Watchmen/);
   assert.match(text(), /Superheroes/);
   assert.match(text(), /Shares subjects with/);
-  // Wikidata's genre reaches the panel line and the relation text.
-  assert.match(text(), /Wikidata files it as superhero fiction/);
+  // Wikidata's genre reaches the panel pills and the relation text.
+  assert.match(text(), /Wikidata genres/);
+  assert.ok(
+    [...$('panel').querySelectorAll('.genres .tag')].some((b) => b.textContent === 'superhero fiction'),
+    'the genre pills are missing',
+  );
   assert.match(text(), /Wikidata files both as superhero fiction/);
 });
 
 await test('a genre on the panel opens a map of everything filed under it', async () => {
-  const link = [...$('panel').querySelectorAll('.genres .inline-link')].find((b) => b.textContent === 'superhero fiction');
-  assert.ok(link, 'the genre line has no link');
+  const link = [...$('panel').querySelectorAll('.genres .tag')].find((b) => b.textContent === 'superhero fiction');
+  assert.ok(link, 'the genre pill is missing');
   link.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle(3000);
   assert.equal(window.location.hash, '#genre/Q1');
