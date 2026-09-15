@@ -103,37 +103,58 @@ export function itemsForAuthors(openLibraryKeys) {
   });
 }
 
+/** Wikidata's own search box, for the few places something is known only by name. */
+async function searchEntities(name) {
+  const params = new URLSearchParams({
+    action: 'wbsearchentities',
+    search: name,
+    language: 'en',
+    uselang: 'en',
+    type: 'item',
+    limit: '5',
+    format: 'json',
+    origin: '*', // Wikidata's API needs this to answer a browser at all.
+  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`${SEARCH}?${params}`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return Array.isArray(data?.search) ? data.search : [];
+  } catch {
+    degraded = true;
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Last resort when an author has no Open Library ID recorded on Wikidata. */
 export function itemForName(name) {
   return cached(`wd:name:${name.toLowerCase()}`, async () => {
-    const params = new URLSearchParams({
-      action: 'wbsearchentities',
-      search: name,
-      language: 'en',
-      uselang: 'en',
-      type: 'item',
-      limit: '5',
-      format: 'json',
-      origin: '*', // Wikidata's API needs this to answer a browser at all.
-    });
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    try {
-      const res = await fetch(`${SEARCH}?${params}`, { signal: controller.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const hits = Array.isArray(data?.search) ? data.search : [];
-      // Wikidata's one-line descriptions are enough to tell a novelist from a
-      // footballer of the same name.
-      const person = hits.find((h) => /writer|author|novelist|poet|cartoonist|artist|journalist|screenwriter|playwright|illustrator/i.test(h.description || ''));
-      const pick = person || hits[0];
-      return pick?.id ? { qid: pick.id, label: pick.label || name } : null;
-    } catch {
-      degraded = true;
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
+    const hits = await searchEntities(name);
+    if (!hits) return null;
+    // Wikidata's one-line descriptions are enough to tell a novelist from a
+    // footballer of the same name.
+    const person = hits.find((h) => /writer|author|novelist|poet|cartoonist|artist|journalist|screenwriter|playwright|illustrator/i.test(h.description || ''));
+    const pick = person || hits[0];
+    return pick?.id ? { qid: pick.id, label: pick.label || name } : null;
+  });
+}
+
+/**
+ * A genre named in a URL rather than identified. The same name usually sits on
+ * a film genre and a disambiguation page too, so the description decides.
+ */
+export function genreByName(name) {
+  return cached(`wd:genreName:${name.toLowerCase()}`, async () => {
+    const hits = await searchEntities(name);
+    if (!hits) return null;
+    const usable = hits.filter((h) => !/disambiguation|film|television|video game|album/i.test(h.description || ''));
+    const genre = usable.find((h) => /genre|fiction|literature|novel|literary/i.test(h.description || ''));
+    const pick = genre || usable[0];
+    return pick?.id ? { qid: pick.id, label: pick.label || name } : null;
   });
 }
 
@@ -178,6 +199,72 @@ export function genresFor(openLibraryKeys) {
       }
     }
     return reachable ? found : null;
+  });
+}
+
+// How many rows a genre query may return. Big genres run to thousands of works
+// with an Open Library ID; the best-known few hundred are more than a map holds.
+const GENRE_ROWS = 200;
+
+/**
+ * The same property run backwards: every work Wikidata files under one genre
+ * that also carries an Open Library work ID. That is a subject map from a
+ * vocabulary no library has, and it reaches every book Wikidata knows rather
+ * than the half of a map that happens to resolve.
+ *
+ * Rows come best known first, judged by how many Wikipedias have an article
+ * on the work. P648 is also recorded on writers and on single editions, and
+ * both are left out here: this map is books. One item can carry several work
+ * IDs (Dune has three), so the caller gets every key and decides.
+ *
+ * Returns `{ label, works, truncated }`, where each work is
+ * `{ qid, label, key, sitelinks }`, or null when the service couldn't be reached.
+ */
+export function worksInGenre(qid) {
+  if (!/^Q\d+$/.test(qid || '')) return Promise.resolve({ label: '', works: [], truncated: false });
+
+  return cached(`wd:genre:${qid}`, async () => {
+    const rows = await runQuery(`
+      SELECT ?genreLabel ?item ?itemLabel ?ol ?sitelinks WHERE {
+        VALUES ?genre { wd:${qid} }
+        ?item wdt:P136 ?genre ;
+              wdt:P648 ?ol .
+        FILTER(STRENDS(?ol, "W"))
+        OPTIONAL { ?item wikibase:sitelinks ?sitelinks }
+        SERVICE wikibase:label { bd:serviceParam wikibase:language "en,mul". }
+      }
+      ORDER BY DESC(?sitelinks)
+      LIMIT ${GENRE_ROWS}`);
+    if (rows === null) return null;
+
+    const works = [];
+    const seen = new Set();
+    let label = '';
+    for (const row of rows) {
+      label = label || value(row, 'genreLabel');
+      const item = qidOf(value(row, 'item'));
+      const key = value(row, 'ol');
+      if (!item || !/^OL\d+W$/.test(key) || seen.has(`${item}:${key}`)) continue;
+      seen.add(`${item}:${key}`);
+      works.push({
+        qid: item,
+        label: isPlaceholder(value(row, 'itemLabel')) ? '' : value(row, 'itemLabel'),
+        key,
+        sitelinks: Number(value(row, 'sitelinks')) || 0,
+      });
+    }
+
+    // A genre with nothing under it still needs a name for the message.
+    if (isPlaceholder(label)) {
+      const named = await runQuery(`
+        SELECT ?genreLabel WHERE {
+          VALUES ?genre { wd:${qid} }
+          SERVICE wikibase:label { bd:serviceParam wikibase:language "en,mul". }
+        }`);
+      const found = value(named?.[0], 'genreLabel');
+      label = isPlaceholder(found) ? '' : found;
+    }
+    return { label, works, truncated: rows.length >= GENRE_ROWS };
   });
 }
 

@@ -347,17 +347,34 @@ export function createPanel(root, actions) {
   function loadGenres(node, token, slot) {
     const render = (genres) => {
       if (token !== detailToken) return;
-      const labels = (genres || []).map((g) => g.label).filter((label) => !isFormOnly(label));
-      if (!labels.length) {
+      const picks = (genres || []).filter((g) => g.label && !isFormOnly(g.label)).slice(0, 4);
+      if (!picks.length) {
         slot.remove();
         return;
       }
-      slot.replaceWith(
-        h('p', {
-          class: 'hint genres',
-          text: `Wikidata files it as ${formatList(labels.slice(0, 4))}.`,
-        }),
+      // Each genre is the way into a map of everything filed under it — a
+      // subject map from a vocabulary no library has.
+      const named = picks.map((genre) =>
+        genre.qid
+          ? h(
+              'button',
+              {
+                type: 'button',
+                class: 'inline-link',
+                title: `Map everything Wikidata files as “${genre.label}”`,
+                onClick: () => actions.exploreGenre(genre),
+              },
+              genre.label,
+            )
+          : h('span', { text: genre.label }),
       );
+      // Intl.ListFormat joins strings, not elements, so the commas go in by hand.
+      const joined = named.flatMap((el, i) => {
+        if (i === 0) return [el];
+        const last = i === named.length - 1;
+        return [last ? (named.length > 2 ? ', and ' : ' and ') : ', ', el];
+      });
+      slot.replaceWith(h('p', { class: 'hint genres' }, 'Wikidata files it as ', ...joined, '.'));
     };
     if (node.genres?.length) {
       render(node.genres);

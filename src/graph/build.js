@@ -670,6 +670,179 @@ export async function buildSubjectMap(subjects, ctx) {
   };
 }
 
+// ---------- Genre maps ----------
+
+const GENRE_BOOKS = 36;
+// Work IDs looked up on Open Library. More than the map holds, because an item
+// can carry several and some of them no longer resolve.
+const GENRE_KEYS = 60;
+// Items whose stale IDs are chased through redirects, one request each. Capped
+// so a genre full of merged records costs a few seconds rather than a minute.
+const GENRE_REDIRECTS = 16;
+
+// A title with its subtitle, series tag and punctuation gone: "Frankenstein;
+// or, The Modern Prometheus" and "Llana of Gathol (Mars #10)" become
+// "frankenstein" and "llana of gathol". Only a real separator counts as the
+// start of a subtitle, so "Dune Messiah" stays two words from "Dune".
+const plainTitle = (text) =>
+  String(text || '')
+    .replace(/\s*\(.*?\)\s*/g, ' ')
+    .split(/\s*[:;]\s*|\s+[-–—]\s+/)[0]
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/** 1 when a catalogue title and a Wikidata label name the same book. */
+function sameTitle(book, item) {
+  const a = plainTitle(book.title);
+  const b = plainTitle(item.label);
+  return a && b && a === b ? 1 : 0;
+}
+/**
+ * Everything Wikidata files under one genre. Where a subject map asks the
+ * catalogue what's shelved under a heading, this asks Wikidata what's been
+ * filed under a term from its controlled vocabulary, then reads those books
+ * out of Open Library in a couple of batched lookups so they can be linked the
+ * same way every other map is: by what they're catalogued under.
+ *
+ * Dots are sized by how widely known a book is — how many Wikipedias have an
+ * article on it — since every book here answers to the genre equally.
+ */
+export async function buildGenreMap(qid, ctx) {
+  ctx.progress('Asking Wikidata what it files under this genre');
+  const found = await wd.worksInGenre(qid);
+  ctx.check();
+  if (found === null) {
+    throw new EmptyMapError(
+      "Wikidata's query service didn't answer. It's free and sometimes busy — wait a moment and try again. Subject maps don't depend on it.",
+    );
+  }
+  const label = found.label || qid;
+  if (!found.works.length) {
+    throw new EmptyMapError(
+      `Wikidata files nothing with an Open Library record as “${label}”. Its genres reach the well-known corner of the catalogue and stop; try a subject map instead.`,
+    );
+  }
+
+  // One Wikidata item, however many Open Library IDs it carries, is one book.
+  const items = new Map();
+  for (const work of found.works) {
+    const item = items.get(work.qid) || { qid: work.qid, label: work.label, sitelinks: work.sitelinks, keys: [] };
+    item.keys.push(work.key);
+    items.set(work.qid, item);
+  }
+  const ordered = [...items.values()].sort((a, b) => b.sitelinks - a.sitelinks);
+  const keys = [];
+  for (const item of ordered) {
+    if (keys.length >= GENRE_KEYS) break;
+    keys.push(...item.keys);
+  }
+
+  ctx.progress(`Looking up ${keys.length} books on Open Library`);
+  const books = await ol.booksByKeys(keys);
+  ctx.check();
+  const byKey = new Map(books.map((book) => [book.key, book]));
+
+  // Where an item carries several work IDs, one is usually the book and the
+  // rest are mislinked — Dune's item points at Dune Messiah too. The one whose
+  // title matches the item's name wins, then the one that stayed in print.
+  const pickFor = (item) =>
+    item.keys
+      .map((key) => byKey.get(key))
+      .filter(Boolean)
+      .sort((a, b) => sameTitle(b, item) - sameTitle(a, item) || b.editions - a.editions)[0] || null;
+
+  // Open Library merges duplicate records and leaves redirects behind, and
+  // Wikidata keeps the old IDs: two of Dune's three lead, by way of each other,
+  // to a fourth that the search index knows. An item that came back with
+  // nothing, or with a title that isn't its own, has its dead IDs followed.
+  const asked = new Set(keys);
+  const stale = ordered
+    .filter((item) => item.keys.some((key) => asked.has(key)))
+    .filter((item) => {
+      const pick = pickFor(item);
+      return !pick || !sameTitle(pick, item);
+    })
+    .slice(0, GENRE_REDIRECTS);
+  if (stale.length) {
+    ctx.progress(`Following ${stale.length} merged records`);
+    const moved = await Promise.all(
+      stale.flatMap((item) =>
+        item.keys
+          .filter((key) => !byKey.has(key))
+          .map((key) =>
+            ol
+              .currentWorkKey(key)
+              .then((to) => ({ item, to }))
+              .catch((err) => {
+                rethrowStale(err);
+                return { item, to: null };
+              }),
+          ),
+      ),
+    );
+    ctx.check();
+    for (const { item, to } of moved) {
+      if (to && !item.keys.includes(to)) item.keys.push(to);
+    }
+    const extra = [...new Set(moved.map((m) => m.to).filter((to) => to && !byKey.has(to)))];
+    if (extra.length) {
+      for (const book of await ol.booksByKeys(extra)) byKey.set(book.key, book);
+      ctx.check();
+    }
+  }
+
+  const chosen = [];
+  const drawnKeys = new Set();
+  for (const item of ordered) {
+    if (chosen.length >= GENRE_BOOKS) break;
+    const book = pickFor(item);
+    // Two items can land on the same surviving record; one dot is enough.
+    if (book && !drawnKeys.has(book.key)) {
+      drawnKeys.add(book.key);
+      chosen.push({ book, item });
+    }
+  }
+  if (!chosen.length) {
+    throw new EmptyMapError(
+      `Wikidata files ${items.size} books as “${label}”, but Open Library returned none of them by ID. Try again in a moment.`,
+    );
+  }
+
+  const g = new Graph({ type: 'undirected' });
+  const fame = Math.max(1, ...chosen.map((c) => c.item.sitelinks));
+  for (const { book, item } of chosen) {
+    // Fame is skewed — one book on a hundred Wikipedias, most on a handful —
+    // so it's read on a log scale, and nothing shrinks below a third.
+    const score = 0.3 + 0.7 * (Math.log1p(item.sitelinks) / Math.log1p(fame));
+    // Every book here is known to carry the genre, whatever its current ID
+    // says; the overlay replaces this with the full list where it can.
+    upsertNode(
+      g,
+      bookId(book.key),
+      bookNode({ ...book, genres: [{ qid, label }] }, score, 1, { qid: item.qid, sitelinks: item.sitelinks }),
+    );
+  }
+  ctx.update(g, { fresh: true, centerId: null });
+
+  ctx.progress('Connecting the map');
+  weave(g, { skipSeedPairs: false, maxLinks: 7 });
+  ctx.update(g, { centerId: null });
+
+  // Every book here shares the seed genre, which the rarity weighting reads as
+  // common ground; what the overlay adds is the second genre two of them share.
+  addGenreOverlay(g, ctx, { skipSeedPairs: false, maxLinks: 7 }).catch(() => {});
+
+  return {
+    graph: g,
+    seedId: null,
+    seedLabel: label,
+    genre: { qid, label, known: items.size, truncated: found.truncated, drawn: chosen.length },
+  };
+}
+
 // ---------- Influence maps ----------
 
 const INFLUENCE_MAX_NODES = 70;

@@ -66,6 +66,25 @@ await test('selecting a dot shows the book, its subjects and its neighbours', as
   assert.match(text(), /Wikidata files both as superhero fiction/);
 });
 
+await test('a genre on the panel opens a map of everything filed under it', async () => {
+  const link = [...$('panel').querySelectorAll('.genres .inline-link')].find((b) => b.textContent === 'superhero fiction');
+  assert.ok(link, 'the genre line has no link');
+  link.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle(3000);
+  assert.equal(window.location.hash, '#genre/Q1');
+  assert.match($('map-title').textContent, /Books Wikidata files as superhero fiction/);
+  assert.ok(window.document.querySelectorAll('.nodes g.node').length >= 2, 'too few dots');
+  assert.match(text(), /carry this genre and an Open Library record/);
+  assert.match(text(), /Most widely known first/);
+});
+
+await test('a genre named in the address bar resolves to its Wikidata ID', async () => {
+  window.location.hash = '#genre/q/dystopian%20fiction';
+  await settle(3000);
+  assert.equal(window.location.hash, '#genre/Q3');
+  assert.match($('map-title').textContent, /dystopian fiction/);
+});
+
 await test('an influence map draws directed arrows', async () => {
   window.location.hash = '#influence/OL1A';
   await settle(4000);

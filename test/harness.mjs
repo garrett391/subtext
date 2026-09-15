@@ -163,6 +163,17 @@ const GENRES = {
   OL4A: [['Q1', 'superhero fiction']],
 };
 
+// What a genre map reads: the genres above run backwards. Each work is its own
+// Wikidata item, sized by how many Wikipedias cover it. Brave New World's item
+// carries only stale work IDs, the way Dune's real item does: one is gone and
+// the other redirects to the record the search index knows. OL1A is a writer
+// filed under a genre.
+const GENRE_LABELS = { Q1: 'superhero fiction', Q2: 'alternate history', Q3: 'dystopian fiction', Q6: 'memoir', Q7: 'historical fiction' };
+const ITEM_OF = { OL1W: 'Q101', OL5W: 'Q105', OL7W: 'Q107', OL8W: 'Q108', OL3W: 'Q103', OL6W: 'Q106', OL10W: 'Q110', OL1A: 'Q205721', OL4A: 'Q368519' };
+const ITEM_KEYS = { Q108: ['OL80W', 'OL81W'] };
+const REDIRECTS = { OL81W: 'OL8W' };
+const SITELINKS = { Q101: 60, Q105: 30, Q107: 138, Q108: 74, Q103: 50, Q106: 20, Q110: 12 };
+
 const asDoc = (work) => ({
   key: `/works/${work.key}`,
   title: work.title,
@@ -208,6 +219,16 @@ export function installFakeNetwork() {
       return json({ results: { bindings: bindingsFor(url.searchParams.get('query') || '') } });
     }
 
+    // wbsearchentities: names looked up on Wikidata itself.
+    if (url.hostname === 'www.wikidata.org') {
+      const q = (url.searchParams.get('search') || '').toLowerCase();
+      const hits = [
+        ...Object.entries(GENRE_LABELS).map(([id, label]) => ({ id, label, description: 'genre of fiction' })),
+        ...Object.entries(LABELS).map(([id, label]) => ({ id, label, description: 'writer' })),
+      ].filter((hit) => hit.label.toLowerCase().includes(q));
+      return json({ search: hits.slice(0, 5) });
+    }
+
     calls.openLibrary.push(url.pathname + url.search);
     const params = url.searchParams;
 
@@ -219,7 +240,11 @@ export function installFakeNetwork() {
       let docs = WORKS;
 
       if (subject) docs = WORKS.filter((w) => hasSubject(w, subject));
-      else if (/^key:\/works\//.test(q)) docs = WORKS.filter((w) => `/works/${w.key}` === q.slice(4));
+      else if (/^key:\(/.test(q)) {
+        // Several keys OR'd together, the way a genre map reads its books.
+        const wanted = new Set([...q.matchAll(/\/works\/(OL\d+W)/g)].map((m) => m[1]));
+        docs = WORKS.filter((w) => wanted.has(w.key));
+      } else if (/^key:\/works\//.test(q)) docs = WORKS.filter((w) => `/works/${w.key}` === q.slice(4));
       else if (/^author_key:/.test(q)) docs = WORKS.filter((w) => w.author[0] === q.split(':')[1]);
       else if (/^subject:/.test(q)) {
         const wanted = q.replace(/^subject:"?|"$/g, '');
@@ -255,6 +280,9 @@ export function installFakeNetwork() {
 
     const work = /^\/works\/(OL\d+W)\.json$/.exec(url.pathname);
     if (work) {
+      if (REDIRECTS[work[1]]) {
+        return json({ key: `/works/${work[1]}`, type: { key: '/type/redirect' }, location: `/works/${REDIRECTS[work[1]]}` });
+      }
       const found = WORKS.find((w) => w.key === work[1]);
       if (!found) return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
       return json({
@@ -312,6 +340,32 @@ export function installFakeNetwork() {
 function bindingsFor(query) {
   const entity = (qid) => ({ type: 'uri', value: `http://www.wikidata.org/entity/${qid}` });
   const literal = (v) => ({ type: 'literal', value: v });
+
+  // worksInGenre: VALUES ?genre { wd:Q… }, the genres run backwards — or,
+  // with no P136 in the query, just the genre's name.
+  if (query.includes('VALUES ?genre')) {
+    const qid = /VALUES \?genre \{ wd:(Q\d+) \}/.exec(query)?.[1];
+    const label = GENRE_LABELS[qid];
+    if (!query.includes('P136')) return label ? [{ genreLabel: literal(label) }] : [];
+    const rows = [];
+    for (const [key, genres] of Object.entries(GENRES)) {
+      if (!genres.some(([g]) => g === qid)) continue;
+      // The real query filters writers and editions out; the harness leaves
+      // one writer in, so the builder is seen to cope with either.
+      const item = ITEM_OF[key];
+      const keys = ITEM_KEYS[item] || Object.keys(ITEM_OF).filter((k) => ITEM_OF[k] === item);
+      for (const olKey of keys) {
+        rows.push({
+          genreLabel: literal(label),
+          item: entity(item),
+          itemLabel: literal(WORKS.find((w) => w.key === key)?.title || LABELS[item] || item),
+          ol: literal(olKey),
+          sitelinks: literal(String(SITELINKS[item] || 0)),
+        });
+      }
+    }
+    return rows.sort((a, b) => Number(b.sitelinks.value) - Number(a.sitelinks.value));
+  }
 
   // genresFor: VALUES ?ol { "OL1W" … } joined to P136.
   if (query.includes('wdt:P136 ?genre')) {

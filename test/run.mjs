@@ -23,6 +23,7 @@ const {
   buildBookMap,
   buildAuthorMap,
   buildSubjectMap,
+  buildGenreMap,
   buildInfluenceMap,
   buildPathMap,
   expandNode,
@@ -373,6 +374,40 @@ await test('reports how big each subject is', () => {
 
 await test('an unknown subject fails with an explanation', async () => {
   await assert.rejects(() => buildSubjectMap(['zzzz nothing'], ctx), /nothing filed under/i);
+});
+
+console.log('\nGenre maps');
+
+const genreMap = await buildGenreMap('Q1', ctx);
+
+await test('draws everything Wikidata files under a genre, named after it', () => {
+  assert.equal(genreMap.seedLabel, 'superhero fiction');
+  assert.equal(genreMap.seedId, null);
+  assert.ok(genreMap.graph.hasNode(bookId('OL1W')), 'Watchmen missing');
+  assert.ok(genreMap.graph.hasNode(bookId('OL5W')), 'The Dark Knight Returns missing');
+  assert.equal(genreMap.genre.drawn, 2);
+});
+
+await test('a writer filed under the genre is not drawn as a book', () => {
+  genreMap.graph.forEachNode((_id, attrs) => assert.equal(attrs.kind, 'book'));
+  assert.ok(!genreMap.graph.hasNode(authorId('OL1A')));
+  assert.ok(!genreMap.graph.hasNode(bookId('OL1A')));
+});
+
+await test('stale work IDs are followed to the merged record, and the better known sits bigger', async () => {
+  const dystopias = await buildGenreMap('Q3', ctx);
+  assert.equal(dystopias.graph.order, 2, `drew ${dystopias.graph.order} books`);
+  assert.ok(dystopias.graph.hasNode(bookId('OL8W')), 'Brave New World missing');
+  assert.ok(!dystopias.graph.hasNode(bookId('OL80W')) && !dystopias.graph.hasNode(bookId('OL81W')), 'a stale work ID was drawn');
+  assert.equal(dystopias.genre.known, 2);
+  const orwell = dystopias.graph.getNodeAttribute(bookId('OL7W'), 'score');
+  const huxley = dystopias.graph.getNodeAttribute(bookId('OL8W'), 'score');
+  assert.ok(orwell > huxley, `expected 1984 (${orwell}) above Brave New World (${huxley})`);
+  assert.ok(dystopias.graph.edge(bookId('OL7W'), bookId('OL8W')), 'the two dystopias were not linked');
+});
+
+await test('a genre with nothing under it says so', async () => {
+  await assert.rejects(() => buildGenreMap('Q999', ctx), /files nothing/i);
 });
 
 console.log('\nInfluence maps');

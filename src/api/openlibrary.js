@@ -332,6 +332,58 @@ export function bookByKey(key) {
   });
 }
 
+// Keys per batched lookup. Search takes a Solr query, and thirty keys OR'd
+// together is a comfortable URL that comes back in one round trip.
+const KEYS_PER_SEARCH = 30;
+
+/**
+ * Several works at once, by ID, in the same shape a search returns — subjects,
+ * call numbers and page counts included. Used when a list of IDs arrives from
+ * somewhere else, which would otherwise mean one request per book.
+ */
+export async function booksByKeys(keys) {
+  const wanted = [...new Set(keys.filter((k) => /^OL\d+W$/.test(k || '')))];
+  const books = [];
+  for (let i = 0; i < wanted.length; i += KEYS_PER_SEARCH) {
+    const batch = wanted.slice(i, i + KEYS_PER_SEARCH);
+    const found = await cached(`ol:keys:${batch.join(',')}`, async () => {
+      const data = await getJson('/search.json', {
+        q: `key:(${batch.map((k) => `/works/${k}`).join(' OR ')})`,
+        limit: batch.length,
+        fields: SEARCH_FIELDS,
+      });
+      return asArray(data.docs).map(bookFromSearchDoc).filter((b) => b.key);
+    });
+    books.push(...found);
+  }
+  return books;
+}
+
+/**
+ * Where a work ID leads today. Open Library merges duplicate records and
+ * leaves a redirect behind, sometimes a chain of them, and the search index
+ * only knows the survivor. Returns the surviving key, or null if the ID is gone.
+ */
+export function currentWorkKey(key) {
+  return cached(`ol:redirect:${key}`, async () => {
+    let current = key;
+    for (let hop = 0; hop < 4; hop++) {
+      let record;
+      try {
+        record = await getJson(`/works/${current}.json`);
+      } catch (err) {
+        if (err.notFound) return null;
+        throw err;
+      }
+      if (record?.type?.key !== '/type/redirect') return current;
+      const next = stripKey(record.location);
+      if (!/^OL\d+W$/.test(next) || next === current) return null;
+      current = next;
+    }
+    return null;
+  });
+}
+
 /**
  * Books filed under a subject. The dedicated `subject` parameter is the direct
  * route; when it comes back empty the same question is asked through the plain

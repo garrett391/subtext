@@ -51,7 +51,7 @@ export function createAbout() {
         h('h3', { text: 'Wikidata' }),
         h('p', {
           class: 'hint',
-          text: 'Supplies the influence arrows, from claims editors have recorded that one writer shaped another. Coverage is deep for well-documented writers and empty for many others, and it is an argument rather than a measurement. When Wikidata is busy, the arrows are missing and nothing else changes.',
+          text: 'Supplies the influence arrows, from claims editors have recorded that one writer shaped another, and a controlled vocabulary of genres that can be mapped in its own right. Coverage is deep for well-documented books and writers and empty for many others, and influence is an argument rather than a measurement. When Wikidata is busy, the arrows and genres are missing and nothing else changes.',
         }),
         link('https://www.wikidata.org', 'wikidata.org'),
       ),
