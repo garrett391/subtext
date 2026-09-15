@@ -87,7 +87,7 @@ export function itemsForAuthors(openLibraryKeys) {
         SELECT ?ol ?item ?itemLabel WHERE {
           VALUES ?ol { ${quoted(batch)} }
           ?item wdt:P648 ?ol .
-          SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+          SERVICE wikibase:label { bd:serviceParam wikibase:language "en,mul". }
         }`);
       if (rows === null) continue;
       reachable = true;
@@ -202,7 +202,7 @@ export function influenceNeighbours(qids) {
           { ?to wdt:P737 ?anchor . BIND(?anchor AS ?from) }
           OPTIONAL { ?from wdt:P648 ?fromOl . }
           OPTIONAL { ?to wdt:P648 ?toOl . }
-          SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+          SERVICE wikibase:label { bd:serviceParam wikibase:language "en,mul". }
         }
         LIMIT 500`);
       if (rows === null) continue;
@@ -217,7 +217,11 @@ export function influenceNeighbours(qids) {
         });
       }
     }
-    return reachable ? edges.filter((e) => !isPlaceholder(e.from.label) && !isPlaceholder(e.to.label)) : null;
+    // An anchor is already on the caller's map under a name it trusts, so an
+    // unlabelled anchor is harmless; only an unlabelled stranger is unusable.
+    const anchors = new Set(list);
+    const usable = (end) => anchors.has(end.qid) || !isPlaceholder(end.label);
+    return reachable ? edges.filter((e) => usable(e.from) && usable(e.to)) : null;
   });
 }
 
@@ -258,7 +262,7 @@ export function authorFacts(qid) {
           BIND("description" AS ?type)
           BIND(STR(?description) AS ?text)
         }
-        SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+        SERVICE wikibase:label { bd:serviceParam wikibase:language "en,mul". }
       }
       LIMIT 400`);
     if (rows === null) return null;
