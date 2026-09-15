@@ -4,7 +4,9 @@ import { cached } from './cache.js';
  * Open Library knows what books are about. It doesn't know who read whom.
  * Wikidata does: property P737, "influenced by", is an editorially curated
  * claim that one writer shaped another, and it's the one piece of this app that
- * couldn't be reconstructed from a catalogue.
+ * couldn't be reconstructed from a catalogue. Wikidata also files works under a
+ * controlled vocabulary of genres (P136), which is a third opinion on what a
+ * book is beside its subject headings and its call number.
  *
  * The join between the two is property P648, "Open Library ID", which Wikidata
  * records for tens of thousands of authors. That's what lets an author found on
@@ -132,6 +134,50 @@ export function itemForName(name) {
     } finally {
       clearTimeout(timer);
     }
+  });
+}
+
+// ---------- Genres ----------
+
+/**
+ * Wikidata's genres for a set of Open Library works or authors, one query per
+ * batch. P648 is recorded on works as well as on writers, so the same join
+ * that finds an author finds a book.
+ *
+ * Returns a map from Open Library key to a list of `{ qid, label }`, holding
+ * only the keys that resolved and carry at least one genre — or null when the
+ * service couldn't be reached.
+ */
+export function genresFor(openLibraryKeys) {
+  const keys = [...new Set(openLibraryKeys.filter(Boolean))].sort();
+  if (!keys.length) return Promise.resolve(new Map());
+
+  return cached(`wd:genres:${keys.join(',')}`, async () => {
+    const found = new Map();
+    let reachable = false;
+
+    for (const batch of chunk(keys, BATCH)) {
+      const rows = await runQuery(`
+        SELECT ?ol ?genre ?genreLabel WHERE {
+          VALUES ?ol { ${quoted(batch)} }
+          ?item wdt:P648 ?ol .
+          ?item wdt:P136 ?genre .
+          SERVICE wikibase:label { bd:serviceParam wikibase:language "en,mul". }
+        }
+        LIMIT 1000`);
+      if (rows === null) continue;
+      reachable = true;
+      for (const row of rows) {
+        const key = value(row, 'ol');
+        const qid = qidOf(value(row, 'genre'));
+        const label = value(row, 'genreLabel');
+        if (!key || !qid || isPlaceholder(label)) continue;
+        const list = found.get(key) || [];
+        if (!list.some((g) => g.qid === qid)) list.push({ qid, label });
+        found.set(key, list);
+      }
+    }
+    return reachable ? found : null;
   });
 }
 

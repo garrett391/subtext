@@ -12,6 +12,7 @@ import {
   facetWeight,
 } from './subjects.js';
 import { parseShelf, shelfAgreement, lengthFactor } from './classification.js';
+import { genreWeights, genreAgreement, sharedGenres } from './genres.js';
 
 // Thrown when a newer search replaces the one in progress.
 export class StaleError extends Error {}
@@ -48,6 +49,12 @@ const SAME_AUTHOR_LINK = 0.42;
 // opinion, not a verdict.
 const SHELF_WEIGHT = 0.22;
 
+// How far a shared Wikidata genre can lift a link towards 1. It only ever
+// raises: two books nobody filed under the same genre keep the catalogue's
+// score, because a Wikidata genre list is usually one entry long and a missing
+// match says more about the list than about the books.
+const GENRE_LIFT = 0.3;
+
 /**
  * Folds shelf and length into a score already computed from subjects. When a
  * book has no call number — about one in ten, and everything from the subjects
@@ -59,6 +66,22 @@ function withShelf(base, a, b) {
   const agreement = shelfAgreement(a?.shelf, b?.shelf);
   const blended = agreement == null ? base : (1 - SHELF_WEIGHT) * base + SHELF_WEIGHT * agreement;
   return blended * lengthFactor(a?.pages, b?.pages);
+}
+
+/**
+ * Lifts a score by how much of Wikidata's genre vocabulary two things share.
+ * Additive only, and nothing at all when either side has no genres on record,
+ * which is most of any map.
+ */
+function withGenres(base, a, b, weights) {
+  const agreement = genreAgreement(a?.genres, b?.genres, weights);
+  if (agreement == null) return base;
+  return base + GENRE_LIFT * agreement * (1 - base);
+}
+
+/** Rarity weights for the genres on a map, recomputed whenever genres land. */
+function genreWeightsOf(g) {
+  return genreWeights(g.mapNodes((_id, attrs) => attrs.genres));
 }
 
 function bookNode(book, score, hop, extra = {}) {
@@ -76,6 +99,7 @@ function bookNode(book, score, hop, extra = {}) {
     subjects: book.subjects || [],
     shelf: parseShelf(book.lcc, book.ddc),
     pages: book.pages ?? null,
+    genres: book.genres || [],
     vector,
     norm: normOf(vector),
     score,
@@ -97,6 +121,7 @@ function authorNode(author, score, hop, extra = {}) {
     vector,
     norm: normOf(vector),
     score,
+    genres: author.genres || [],
     hop,
     ...extra,
   };
@@ -121,6 +146,7 @@ function upsertNode(g, id, attrs) {
     // turns up again from search, that's where the call numbers come from.
     shelf: current.shelf ?? attrs.shelf ?? null,
     pages: current.pages ?? attrs.pages ?? null,
+    genres: current.genres?.length ? current.genres : attrs.genres || [],
   });
   return false;
 }
@@ -158,8 +184,10 @@ function weave(g, { maxLinks = MAX_LINKS_PER_NODE, minLink = MIN_LINK, skipSeedP
     authors: attrs.authors,
     shelf: attrs.shelf,
     pages: attrs.pages,
+    genres: attrs.genres,
     seed: attrs.seed,
   }));
+  const weights = genreWeightsOf(g);
 
   for (const node of nodes) {
     const scored = [];
@@ -169,6 +197,7 @@ function weave(g, { maxLinks = MAX_LINKS_PER_NODE, minLink = MIN_LINK, skipSeedP
       // Author nodes carry no shelf, so this falls through to the subject
       // score untouched on author and influence maps.
       let weight = withShelf(similarity(node.vector, other.vector, node.norm, other.norm), node, other);
+      weight = withGenres(weight, node, other, weights);
       if (sharesAuthor(node, other)) weight = Math.max(weight, SAME_AUTHOR_LINK);
       if (weight >= minLink) scored.push({ id: other.id, weight });
     }
@@ -177,12 +206,59 @@ function weave(g, { maxLinks = MAX_LINKS_PER_NODE, minLink = MIN_LINK, skipSeedP
   }
 }
 
+/**
+ * Lays Wikidata's genres over a map already drawn from the catalogue. Genres
+ * land on the nodes that resolve, every existing link between two of them is
+ * lifted by what they share, and the weave runs again so a pair the catalogue
+ * kept apart can be joined. Nothing is lowered, and a node Wikidata doesn't
+ * know keeps every link it had.
+ *
+ * Returns how many nodes gained genres, or null if Wikidata couldn't be reached.
+ */
+async function addGenreOverlay(g, ctx, weaveOptions = {}) {
+  const keys = g
+    .filterNodes((_id, attrs) => /^OL\d+[WA]$/.test(attrs.key || ''))
+    .map((id) => g.getNodeAttribute(id, 'key'));
+  if (!keys.length) return 0;
+
+  const found = await wd.genresFor(keys);
+  if (!found) return null;
+  ctx.check();
+
+  let landed = 0;
+  g.forEachNode((id, attrs) => {
+    const genres = found.get(attrs.key);
+    if (!genres?.length) return;
+    g.setNodeAttribute(id, 'genres', genres);
+    landed += 1;
+  });
+  if (landed < 2) return landed;
+
+  const weights = genreWeightsOf(g);
+  g.forEachEdge((edge, attrs, source, target) => {
+    if (attrs.influence) return; // An influence claim already outranks anything a genre could add.
+    const lifted = withGenres(attrs.weight, g.getNodeAttributes(source), g.getNodeAttributes(target), weights);
+    if (lifted > attrs.weight) g.mergeEdgeAttributes(edge, { weight: Math.min(1, lifted), genres: true });
+  });
+  weave(g, weaveOptions);
+  ctx.update(g);
+  return landed;
+}
+
 /** What two nodes have in common, in words, for the details panel. */
 export function connectionBetween(g, a, b) {
   if (!g.hasNode(a) || !g.hasNode(b)) return [];
   const left = g.getNodeAttributes(a);
   const right = g.getNodeAttributes(b);
   return sharedFacets(left.vector, right.vector, 4);
+}
+
+/** The Wikidata genres two nodes share, rarest on this map first. */
+export function genresBetween(g, a, b) {
+  if (!g.hasNode(a) || !g.hasNode(b)) return [];
+  const left = g.getNodeAttributes(a);
+  const right = g.getNodeAttributes(b);
+  return sharedGenres(left.genres, right.genres, genreWeightsOf(g));
 }
 
 // ---------- Fetching by subject ----------
@@ -355,6 +431,10 @@ export async function buildBookMap(key, ctx) {
   weave(g);
   ctx.update(g, { centerId: seedId });
 
+  // Wikidata's genres are a third opinion from a slower, busier service, so
+  // the map is drawn from the catalogue first and lifted once they arrive.
+  addGenreOverlay(g, ctx).catch(() => {});
+
   return { graph: g, seedId, seed, seedLabel: seed.title, seedSubtitle: ol.byline(seed), subjects: picks };
 }
 
@@ -493,6 +573,7 @@ export async function buildAuthorMap(key, ctx) {
   // arrives from a different place. The map is already usable without it, so
   // it's added once it turns up rather than waited for.
   addInfluenceOverlay(g, ctx).catch(() => {});
+  addGenreOverlay(g, ctx).catch(() => {});
 
   return { graph: g, seedId, author, seedLabel: author.name, subjects: picks };
 }
@@ -578,6 +659,8 @@ export async function buildSubjectMap(subjects, ctx) {
   ctx.progress('Connecting the map');
   weave(g, { skipSeedPairs: false, maxLinks: 7 });
   ctx.update(g, { centerId: null });
+
+  addGenreOverlay(g, ctx, { skipSeedPairs: false, maxLinks: 7 }).catch(() => {});
 
   return {
     graph: g,

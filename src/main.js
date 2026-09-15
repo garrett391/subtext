@@ -10,6 +10,7 @@ import {
   attachNode,
   relatedBooks,
   connectionBetween,
+  genresBetween,
   bookId,
   authorId,
   StaleError,
@@ -498,7 +499,11 @@ function pathRelation(id, node) {
 function sharedLine(id) {
   if (!app.seedId || id === app.seedId) return '';
   const shared = connectionBetween(app.graph, id, app.seedId);
-  return shared.length ? ` Both filed under ${formatList(shared.slice(0, 3).map(titleCaseSubject))}.` : '';
+  const genres = genresBetween(app.graph, id, app.seedId);
+  return (
+    (shared.length ? ` Both filed under ${formatList(shared.slice(0, 3).map(titleCaseSubject))}.` : '') +
+    (genres.length ? ` Wikidata files both as ${formatList(genres)}.` : '')
+  );
 }
 
 function relationText(id, node) {

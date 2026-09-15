@@ -147,6 +147,22 @@ const LABELS = {
 
 const OPEN_LIBRARY_ID = { Q205721: 'OL1A', Q3335: 'OL6A', Q368519: 'OL4A', Q347262: 'OL2A' };
 
+// Wikidata genres (P136) on works, keyed by Open Library ID. Coverage is
+// deliberately partial — Jimmy Corrigan and Persepolis resolve to nothing, as
+// about half of any real map does — and "novel" stands for the form-only
+// genres that sit on nearly everything.
+const GENRES = {
+  OL1W: [['Q1', 'superhero fiction'], ['Q2', 'alternate history']],
+  OL5W: [['Q1', 'superhero fiction']],
+  OL7W: [['Q3', 'dystopian fiction'], ['Q4', 'political fiction'], ['Q5', 'novel']],
+  OL8W: [['Q3', 'dystopian fiction'], ['Q5', 'novel']],
+  OL3W: [['Q6', 'memoir']],
+  OL6W: [['Q6', 'memoir']],
+  OL10W: [['Q7', 'historical fiction']],
+  OL1A: [['Q1', 'superhero fiction']],
+  OL4A: [['Q1', 'superhero fiction']],
+};
+
 const asDoc = (work) => ({
   key: `/works/${work.key}`,
   title: work.title,
@@ -296,6 +312,18 @@ export function installFakeNetwork() {
 function bindingsFor(query) {
   const entity = (qid) => ({ type: 'uri', value: `http://www.wikidata.org/entity/${qid}` });
   const literal = (v) => ({ type: 'literal', value: v });
+
+  // genresFor: VALUES ?ol { "OL1W" … } joined to P136.
+  if (query.includes('wdt:P136 ?genre')) {
+    const keys = [...query.matchAll(/"(OL\d+[WA])"/g)].map((m) => m[1]);
+    const rows = [];
+    for (const key of keys) {
+      for (const [qid, label] of GENRES[key] || []) {
+        rows.push({ ol: literal(key), genre: entity(qid), genreLabel: literal(label) });
+      }
+    }
+    return rows;
+  }
 
   // itemsForAuthors / influenceAmong: VALUES ?ol { "OL1A" … }
   if (query.includes('wdt:P648 ?ol')) {

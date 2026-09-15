@@ -45,7 +45,7 @@ Paths have their own URLs, so `#path/book/OL2163089W/to/book/OL3521805W` can be 
 
 ## How it works
 
-**Data.** [Open Library](https://openlibrary.org) supplies titles, writers, covers, and the subject headings every map is built from. [Wikidata](https://www.wikidata.org) supplies the influence arrows. Neither needs a key.
+**Data.** [Open Library](https://openlibrary.org) supplies titles, writers, covers, and the subject headings every map is built from. [Wikidata](https://www.wikidata.org) supplies the influence arrows and a second vocabulary of genres. Neither needs a key.
 
 **Similarity.** Open Library has no "books like this book" endpoint, so similarity is computed rather than looked up. It rests mostly on subjects, with where a book is shelved and how long it is as second opinions. Every work carries a list of subjects, and three things happen to that list before it's usable:
 
@@ -64,6 +64,10 @@ What a number means depends on where in the scheme it sits, which is the part wo
 Cataloguers disagree, so the commonest number wins: the real record for *The Stepford Wives* has eight PS3523s, four PZ4s, and one PR6019 filing Ira Levin in the middle of James Joyce. A book nobody classified — about one in ten — is scored on subjects alone rather than penalised, since treating it as filed somewhere else would push exactly the thinnest records off the map.
 
 **Length.** Page counts arrive in the same response. Length is poor evidence of resemblance, so it only holds back a pairing that is obviously the wrong size and never creates one: nothing until one book is twice the other, and never more than a fifteen per cent penalty. A ninety-six-page mini-comic and a five-hundred-page graphic novel can share every heading they have and still be different objects.
+
+**Genres.** Wikidata files works under a controlled vocabulary of genres, one item per genre, where a library heading is whatever a cataloguer typed. That catches what cataloguing misses: *Solaris* and *Dune* are both `planetary romance`, *Frankenstein* is `epistolary novel` and `body horror literature`, and no library heading says any of that. The join is the same Open Library ID that finds a writer for the influence map, so a whole map's worth of books is looked up in one batched query.
+
+It reaches roughly half a map — four books in ten resolve to an item, five in six of those carry a genre — so it is additive only. A pair that shares a genre is lifted towards each other; a pair that can't be checked is left exactly as the catalogue scored it, and a pair that was checked and shares nothing is left alone too, because a Wikidata genre list is usually one entry long and a missing match says more about the list than about the books. Genres describing the form rather than the story (`novel`, `graphic novel`) count for nothing, and the rest are weighted by how many books on the map carry them: `science fiction` on a map seeded from *Dune* is the common ground, `planetary romance` on two of them is the finding. The map is drawn from the catalogue first and lifted once Wikidata answers, the same way influence arrives.
 
 **Building a map.** Subtext takes the subjects that make the seed specific, reads what else is filed under each, and ranks what comes back on two things: how much of the seed's subject profile it shares, and how many of those subject lists it turned up in, and how high. Because every candidate arrives with its own subject list, the links *between* candidates cost nothing extra — a recommendation API would need one request per connection. Each dot keeps only its strongest handful of links, which is what separates a map you can read from a ball of yarn.
 
@@ -89,11 +93,12 @@ The budget counts books opened, not requests: 12 by default, up to 30. Opening a
 src/
   api/
     openlibrary.js  Open Library client: pacing, caching, error messages, clean data shapes
-    wikidata.js     Influence claims over SPARQL, with graceful failure
+    wikidata.js     Influence claims and genres over SPARQL, with graceful failure
     cache.js        Memory and IndexedDB cache
   graph/
     subjects.js     Subject cleaning, faceting and weighting — the similarity model
     classification.js  Library of Congress and Dewey numbers, read for what they mean where
+    genres.js       Wikidata genres as an additive third opinion: form words dropped, rarity weighted
     build.js        Builds book, author, subject, influence and path maps; grows maps from a dot
     analysis.js     Clusters, bridges, paths, farthest dot
     color.js        Spectral colouring
@@ -127,13 +132,13 @@ Neither service is contacted. `test/harness.mjs` answers in the same shapes the 
 - Subject headings are phrased in ways nobody guesses — half of comics history sits under `Comic books, strips, etc`. The search box carries a starting vocabulary of headings that do return books, and shows how many books are behind each suggestion.
 - Shared subjects are a real signal but a different one from what readers think goes together. Two books can be catalogued identically and read nothing alike.
 - Call numbers are assigned one edition at a time and disagree. Taking the commonest throws out the worst of it, but a book with a single odd record is filed by that record. Where the LC schedule wasn't checked, ranges err towards reading a number as an author rather than a topic, which loses signal rather than inventing it.
-- Wikidata's influence coverage is thin outside well-documented writers, and absent for most living ones.
+- Wikidata's influence coverage is thin outside well-documented writers, and absent for most living ones. Its genres reach about half of any map, and lean the same way: the famous corner of a map gets pulled together a little more than the rest.
 - Open Library's search can be slow under load. Requests time out after twenty seconds with a message saying so.
 
 ## Next steps
 - **Bugs:** 
     * 
-- **Next:** Wikidata genres (P136) as a third opinion, batched in one query the way influence already is. It reaches roughly half a map — four books in ten resolve to an item, five in six of those carry a genre — so it has to be additive-only. What it buys is a controlled vocabulary that catches what cataloguing misses: Solaris and Dune are both `planetary romance`, *Frankenstein* is `epistolary novel` and `body horror literature`. No library heading says any of that.
+- **Next:** Genre maps. The same Wikidata property run backwards — everything filed as `planetary romance` that also has an Open Library ID — is a subject map from a vocabulary no library has, and it reaches every book Wikidata knows rather than the half of a map that happens to resolve. The genre line on a book's panel is the natural way in.
 - **Then:** Subject maps that show writers as well as books, so a territory can be read either way without switching maps.
 - **Then:** Use Open Library's subject facets to suggest where to go next from a subject map — the headings that keep company with the one you're on.
 - **Then:** Influence maps seeded from a book rather than a writer, following the book's author but weighting toward writers working in the same form.

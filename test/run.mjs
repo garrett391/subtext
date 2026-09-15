@@ -28,10 +28,13 @@ const {
   expandNode,
   relatedBooks,
   connectionBetween,
+  genresBetween,
   authorDamping,
   bookId,
   authorId,
 } = await import('../src/graph/build.js');
+
+const { genreAgreement, genreWeights, sharedGenres } = await import('../src/graph/genres.js');
 
 let passed = 0;
 const test = async (name, fn) => {
@@ -111,6 +114,34 @@ await test('distinctive subjects drop restatements of each other', () => {
   ).map((p) => p.key);
   assert.ok(picks.includes('dystopias'));
   assert.equal(picks.filter((p) => p.includes('superheroes')).length, 1);
+});
+
+console.log('\nGenres');
+
+await test('a pair nobody can check is left alone, not marked different', () => {
+  assert.equal(genreAgreement([], [{ label: 'space opera' }]), null);
+  assert.equal(genreAgreement([{ label: 'space opera' }], [{ label: 'memoir' }]), 0);
+  assert.equal(genreAgreement([{ label: 'space opera' }], [{ label: 'space opera' }]), 1);
+});
+
+await test('a genre that only names the form counts for nothing', () => {
+  assert.equal(genreAgreement([{ label: 'novel' }], [{ label: 'novel' }]), null);
+  assert.deepEqual(sharedGenres([{ label: 'novel' }, { label: 'gothic fiction' }], [{ label: 'novel' }, { label: 'gothic fiction' }]), ['gothic fiction']);
+});
+
+await test('a genre on two books says more than one on the whole map', () => {
+  const lists = [
+    [{ label: 'science fiction' }, { label: 'planetary romance' }],
+    [{ label: 'science fiction' }, { label: 'planetary romance' }],
+    [{ label: 'science fiction' }],
+    [{ label: 'science fiction' }],
+    [{ label: 'science fiction' }],
+  ];
+  const weights = genreWeights(lists);
+  assert.ok(weights.get('planetary romance') > weights.get('science fiction'));
+  const rare = genreAgreement(lists[0], lists[1], weights);
+  const common = genreAgreement(lists[2], lists[3], weights);
+  assert.ok(rare > common, `${rare} should beat ${common}`);
 });
 
 console.log('\nShelves');
@@ -270,6 +301,24 @@ await test('caps how many links any one book carries', () => {
 await test('explains a link with the subjects behind it', () => {
   const shared = connectionBetween(bookMap.graph, bookId('OL5W'), bookMap.seedId);
   assert.ok(shared.includes('superheroes'), `got ${JSON.stringify(shared)}`);
+});
+
+await test('lays Wikidata genres over the books and lifts the pairs that share one', async () => {
+  // The overlay is fired without being awaited, so give it a turn to land.
+  await new Promise((r) => setTimeout(r, 50));
+  const orwell = bookMap.graph.getNodeAttributes(bookId('OL7W'));
+  assert.ok(orwell.genres.some((g) => g.label === 'dystopian fiction'), `got ${JSON.stringify(orwell.genres)}`);
+  const edge = bookMap.graph.edge(bookId('OL7W'), bookId('OL8W'));
+  assert.ok(edge, '1984 and Brave New World should be linked');
+  assert.ok(bookMap.graph.getEdgeAttribute(edge, 'genres'), 'the shared genre did not lift the link');
+  assert.deepEqual(genresBetween(bookMap.graph, bookId('OL5W'), bookMap.seedId), ['superhero fiction']);
+});
+
+await test('a book Wikidata has never heard of keeps its place', () => {
+  const unknown = bookMap.graph.getNodeAttributes(bookId('OL9W'));
+  assert.deepEqual(unknown.genres, []);
+  assert.ok(bookMap.graph.degree(bookId('OL9W')) > 0, 'an unresolved book lost its links');
+  assert.deepEqual(genresBetween(bookMap.graph, bookId('OL9W'), bookMap.seedId), []);
 });
 
 await test('a book with no subjects on record says so', async () => {

@@ -2,6 +2,7 @@ import * as ol from '../api/openlibrary.js';
 import * as wd from '../api/wikidata.js';
 import { h, icons, formatCount, lifespan, titleCaseSubject, formatList } from './dom.js';
 import { distinctiveSubjects } from '../graph/subjects.js';
+import { isFormOnly } from '../graph/genres.js';
 
 /**
  * The panel has four states: an overview of the current map, details for a
@@ -229,6 +230,7 @@ export function createPanel(root, actions) {
     const token = ++detailToken;
     const meta = h('p', { class: 'meta', text: 'Loading details…' });
     const subjectsSlot = h('div');
+    const genresSlot = h('div');
     const alsoSlot = h('div');
     const descriptionSlot = h('div');
     const linkSlot = h('div');
@@ -274,6 +276,7 @@ export function createPanel(root, actions) {
       // What the book is about comes before where it sits on the map.
       descriptionSlot,
       subjectsSlot,
+      genresSlot,
       nodeActions(
         id,
         node,
@@ -304,6 +307,8 @@ export function createPanel(root, actions) {
         if (token === detailToken) meta.textContent = err.message || '';
       });
 
+    loadGenres(node, token, genresSlot);
+
     if (mapAuthor) {
       ol.authorWorks(mapAuthor.key, 12)
         .then((works) => {
@@ -331,6 +336,40 @@ export function createPanel(root, actions) {
         })
         .catch(() => {});
     }
+  }
+
+  /**
+   * Wikidata's genres for a book, in a line under the subject headings. They're
+   * a controlled vocabulary where the headings are whatever a cataloguer typed,
+   * so this is often the most exact thing said about a book anywhere on the
+   * panel. Absent quietly for the half of books Wikidata doesn't know.
+   */
+  function loadGenres(node, token, slot) {
+    const render = (genres) => {
+      if (token !== detailToken) return;
+      const labels = (genres || []).map((g) => g.label).filter((label) => !isFormOnly(label));
+      if (!labels.length) {
+        slot.remove();
+        return;
+      }
+      slot.replaceWith(
+        h('p', {
+          class: 'hint genres',
+          text: `Wikidata files it as ${formatList(labels.slice(0, 4))}.`,
+        }),
+      );
+    };
+    if (node.genres?.length) {
+      render(node.genres);
+      return;
+    }
+    if (!/^OL\d+W$/.test(node.key || '')) {
+      slot.remove();
+      return;
+    }
+    wd.genresFor([node.key])
+      .then((found) => render(found?.get(node.key)))
+      .catch(() => slot.remove());
   }
 
   // ---------- Author ----------

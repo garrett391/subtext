@@ -61,6 +61,9 @@ await test('selecting a dot shows the book, its subjects and its neighbours', as
   assert.match(text(), /subject overlap with Watchmen/);
   assert.match(text(), /Superheroes/);
   assert.match(text(), /Shares subjects with/);
+  // Wikidata's genre reaches the panel line and the relation text.
+  assert.match(text(), /Wikidata files it as superhero fiction/);
+  assert.match(text(), /Wikidata files both as superhero fiction/);
 });
 
 await test('an influence map draws directed arrows', async () => {
