@@ -23,7 +23,7 @@ const {
   buildBookMap,
   buildAuthorMap,
   buildSubjectMap,
-  buildGenreMap,
+  buildCollectionMap,
   buildInfluenceMap,
   buildPathMap,
   expandNode,
@@ -36,6 +36,9 @@ const {
 } = await import('../src/graph/build.js');
 
 const { genreAgreement, genreWeights, sharedGenres } = await import('../src/graph/genres.js');
+const wd = await import('../src/api/wikidata.js');
+const wp = await import('../src/api/wikipedia.js');
+const { cached } = await import('../src/api/cache.js');
 
 let passed = 0;
 const test = async (name, fn) => {
@@ -378,14 +381,15 @@ await test('an unknown subject fails with an explanation', async () => {
 
 console.log('\nGenre maps');
 
-const genreMap = await buildGenreMap('Q1', ctx);
+const genreMap = await buildCollectionMap('genre', 'Q1', ctx);
 
 await test('draws everything Wikidata files under a genre, named after it', () => {
   assert.equal(genreMap.seedLabel, 'superhero fiction');
   assert.equal(genreMap.seedId, null);
   assert.ok(genreMap.graph.hasNode(bookId('OL1W')), 'Watchmen missing');
   assert.ok(genreMap.graph.hasNode(bookId('OL5W')), 'The Dark Knight Returns missing');
-  assert.equal(genreMap.genre.drawn, 2);
+  assert.equal(genreMap.collection.drawn, 2);
+  assert.equal(genreMap.collection.kind, 'genre');
 });
 
 await test('a writer filed under the genre is not drawn as a book', () => {
@@ -395,11 +399,11 @@ await test('a writer filed under the genre is not drawn as a book', () => {
 });
 
 await test('stale work IDs are followed to the merged record, and the better known sits bigger', async () => {
-  const dystopias = await buildGenreMap('Q3', ctx);
+  const dystopias = await buildCollectionMap('genre', 'Q3', ctx);
   assert.equal(dystopias.graph.order, 2, `drew ${dystopias.graph.order} books`);
   assert.ok(dystopias.graph.hasNode(bookId('OL8W')), 'Brave New World missing');
   assert.ok(!dystopias.graph.hasNode(bookId('OL80W')) && !dystopias.graph.hasNode(bookId('OL81W')), 'a stale work ID was drawn');
-  assert.equal(dystopias.genre.known, 2);
+  assert.equal(dystopias.collection.known, 2);
   const orwell = dystopias.graph.getNodeAttribute(bookId('OL7W'), 'score');
   const huxley = dystopias.graph.getNodeAttribute(bookId('OL8W'), 'score');
   assert.ok(orwell > huxley, `expected 1984 (${orwell}) above Brave New World (${huxley})`);
@@ -407,7 +411,109 @@ await test('stale work IDs are followed to the merged record, and the better kno
 });
 
 await test('a genre with nothing under it says so', async () => {
-  await assert.rejects(() => buildGenreMap('Q999', ctx), /files nothing/i);
+  await assert.rejects(() => buildCollectionMap('genre', 'Q999', ctx), /files nothing/i);
+});
+
+console.log('\nAward and theme maps');
+
+await test('an award map draws the winners, each with the year it won', async () => {
+  const hugo = await buildCollectionMap('award', 'Q9', ctx);
+  assert.equal(hugo.seedLabel, 'Hugo Award for Best Graphic Story');
+  assert.equal(hugo.collection.kind, 'award');
+  assert.ok(hugo.graph.hasNode(bookId('OL1W')) && hugo.graph.hasNode(bookId('OL5W')), 'a winner is missing');
+  assert.equal(hugo.graph.getNodeAttribute(bookId('OL1W'), 'awarded'), 1988);
+  assert.equal(hugo.graph.getNodeAttribute(bookId('OL5W'), 'awarded'), 1987);
+  // An award is not a genre, so the genre pills stay honest.
+  assert.ok(!hugo.graph.getNodeAttribute(bookId('OL1W'), 'genres').some((g) => g.qid === 'Q9'));
+});
+
+await test('a theme map draws everything with that main subject', async () => {
+  const totalitarianism = await buildCollectionMap('theme', 'Q11', ctx);
+  assert.equal(totalitarianism.seedLabel, 'totalitarianism');
+  assert.ok(totalitarianism.graph.hasNode(bookId('OL7W')) && totalitarianism.graph.hasNode(bookId('OL8W')), 'a book is missing');
+  assert.equal(totalitarianism.graph.getNodeAttribute(bookId('OL7W'), 'awarded'), null);
+});
+
+await test('an empty award, and a kind of map that does not exist, both say so', async () => {
+  await assert.rejects(() => buildCollectionMap('award', 'Q999', ctx), /records no book/i);
+  await assert.rejects(() => buildCollectionMap('shelf', 'Q1', ctx), /doesn't draw maps/i);
+});
+
+await test('a genre, award or theme named rather than identified is told apart by its description', async () => {
+  assert.equal((await wd.collectionByName('award', 'hugo award'))?.qid, 'Q9');
+  assert.equal((await wd.collectionByName('theme', 'totalitarianism'))?.qid, 'Q11');
+  assert.equal((await wd.collectionByName('genre', 'dystopian'))?.qid, 'Q3');
+  assert.equal(await wd.collectionByName('shelf', 'anything'), null);
+});
+
+await test('the search box is offered genres and awards, never writers or themes', async () => {
+  assert.deepEqual((await wd.searchCollections('hugo')).map((h) => [h.kind, h.qid]), [['award', 'Q9']]);
+  assert.deepEqual((await wd.searchCollections('superhero')).map((h) => [h.kind, h.qid]), [['genre', 'Q1']]);
+  assert.deepEqual(await wd.searchCollections('moore'), []);
+  assert.deepEqual(await wd.searchCollections('maus'), [], 'a book was offered as a genre');
+  assert.deepEqual(await wd.searchCollections('totalitarianism'), []);
+  assert.deepEqual(await wd.searchCollections('hu'), []);
+});
+
+console.log('\nOne book on Wikidata');
+
+await test('reads first publication, language, series and awards in one query', async () => {
+  const before = calls.sparql;
+  const persepolis = await wd.workFacts('OL4W');
+  assert.equal(calls.sparql, before + 1);
+  assert.equal(persepolis.year, 2000);
+  assert.equal(persepolis.language.label, 'French');
+  assert.deepEqual(persepolis.series, { qid: 'Q13', label: 'Persepolis', ordinal: 1 });
+  assert.equal(persepolis.article, 'https://en.wikipedia.org/wiki/Persepolis_(comics)');
+
+  const watchmen = await wd.workFacts('OL1W');
+  assert.deepEqual(watchmen.awards, [{ qid: 'Q9', label: 'Hugo Award for Best Graphic Story', year: 1988 }]);
+  assert.ok(watchmen.themes.some((t) => t.label === 'vigilantism'));
+  assert.ok(watchmen.genres.some((g) => g.label === 'superhero fiction'));
+});
+
+await test('a book Wikidata has never heard of comes back empty rather than null', async () => {
+  const unknown = await wd.workFacts('OL2W');
+  assert.ok(unknown && !unknown.qid && !unknown.year && !unknown.awards.length, JSON.stringify(unknown));
+  assert.equal(await wd.workFacts('OL1A'), null);
+});
+
+await test("reads Wikidata's years, including the ones before the common era", () => {
+  assert.equal(wd.yearOfTime('1965-01-01T00:00:00Z'), 1965);
+  assert.equal(wd.yearOfTime('-0800-01-01T00:00:00Z'), -800);
+  assert.equal(wd.yearOfTime('0800-01-01T00:00:00Z'), 800);
+  assert.equal(wd.yearOfTime(''), null);
+});
+
+await test("a writer's prizes come back best known first, without the honorary doctorate", async () => {
+  const moore = await wd.authorFacts('Q205721');
+  assert.deepEqual(moore.awards, [{ qid: 'Q9', label: 'Hugo Award for Best Graphic Story', years: [1988] }]);
+});
+
+console.log('\nWikipedia');
+
+await test('fetches the lead of an article Wikidata named, and nothing for one it did not', async () => {
+  const summary = await wp.summaryFor('https://en.wikipedia.org/wiki/Jimmy_Corrigan,_the_Smartest_Kid_on_Earth');
+  assert.match(summary.extract, /graphic novel by Chris Ware/);
+  assert.equal(summary.url, 'https://en.wikipedia.org/wiki/Jimmy_Corrigan,_the_Smartest_Kid_on_Earth');
+  assert.equal(await wp.summaryFor('https://en.wikipedia.org/wiki/Nobody_Wrote_This'), null);
+  assert.equal(await wp.summaryFor('https://example.com/not-wikipedia'), null);
+  assert.equal(wp.articleTitle('https://en.wikipedia.org/wiki/Dune_(novel)#Plot'), 'Dune_(novel)');
+});
+
+console.log('\nCache');
+
+await test("a service that couldn't be asked is asked again next time", async () => {
+  let shrugged = 0;
+  const shrug = () => cached('test:shrug', async () => ((shrugged += 1), null));
+  await shrug();
+  await shrug();
+  assert.equal(shrugged, 2);
+  let answered = 0;
+  const answer = () => cached('test:answer', async () => ((answered += 1), 'yes'));
+  await answer();
+  await answer();
+  assert.equal(answered, 1);
 });
 
 console.log('\nInfluence maps');

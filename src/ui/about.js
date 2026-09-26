@@ -3,8 +3,9 @@ import { h, icons } from './dom.js';
 
 /**
  * Undertone opened with a dialog asking for an API key. Subtext has nothing to
- * ask for: Open Library and Wikidata are both open, so this is only here to say
- * where the data comes from and to let someone clear what's been saved.
+ * ask for: Open Library, Wikidata and Wikipedia are all open, so this is only
+ * here to say where the data comes from and to let someone clear what's been
+ * saved.
  */
 export function createAbout() {
   const dialog = h('dialog', { class: 'settings', 'aria-labelledby': 'about-title' });
@@ -33,7 +34,7 @@ export function createAbout() {
       h('h2', { id: 'about-title', text: 'Where this comes from' }),
       h('p', {
         class: 'dialog-lead',
-        text: 'Subtext draws maps of books from two open sources. Neither needs an account or an API key, which is why there is nothing to set up here.',
+        text: 'Subtext draws maps of books from three open sources. None needs an account or an API key, which is why there is nothing to set up here.',
       }),
       h(
         'section',
@@ -51,9 +52,19 @@ export function createAbout() {
         h('h3', { text: 'Wikidata' }),
         h('p', {
           class: 'hint',
-          text: 'Supplies the influence arrows, from claims editors have recorded that one writer shaped another, and a controlled vocabulary of genres that can be mapped in its own right. Coverage is deep for well-documented books and writers and empty for many others, and influence is an argument rather than a measurement. When Wikidata is busy, the arrows and genres are missing and nothing else changes.',
+          text: 'Supplies the influence arrows, from claims editors have recorded that one writer shaped another, and three controlled vocabularies that can each be mapped in their own right: genres, main subjects, and awards. It also knows when a book was first published and in what language. Coverage is deep for well-documented books and writers and empty for many others, and influence is an argument rather than a measurement. When Wikidata is busy, those pieces are missing and nothing else changes.',
         }),
         link('https://www.wikidata.org', 'wikidata.org'),
+      ),
+      h(
+        'section',
+        { class: 'section' },
+        h('h3', { text: 'Wikipedia' }),
+        h('p', {
+          class: 'hint',
+          text: 'The opening paragraph of a book’s or a writer’s article, shown when Open Library has no description of its own. Only articles Wikidata has already matched to the book are asked for, so nothing is guessed from a title. The text is Wikipedia’s, under CC BY-SA, and is credited where it appears.',
+        }),
+        link('https://en.wikipedia.org', 'en.wikipedia.org'),
       ),
       h(
         'section',
@@ -61,7 +72,7 @@ export function createAbout() {
         h('h3', { text: 'Saved results' }),
         h('p', {
           class: 'hint',
-          text: 'Answers are kept in this browser for a week, so maps you have already opened come back instantly and two free services aren’t asked the same question twice. Nothing leaves your machine.',
+          text: 'Answers are kept in this browser for a week, so maps you have already opened come back instantly and three free services aren’t asked the same question twice. Nothing leaves your machine.',
         }),
         clearButton,
       ),

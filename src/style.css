@@ -1271,3 +1271,25 @@ dialog h2 {
     animation: none !important;
   }
 }
+
+/* An award pill carries the year it was given, quietly. */
+.tag-year {
+  margin-left: 6px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Wikipedia's text is Wikipedia's, and says so under itself. */
+.credit {
+  margin: -8px 0 14px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.credit .text-link {
+  font-size: 12px;
+}
+
+.series {
+  margin-top: 14px;
+}

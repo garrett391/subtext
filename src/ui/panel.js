@@ -1,6 +1,7 @@
 import * as ol from '../api/openlibrary.js';
 import * as wd from '../api/wikidata.js';
-import { h, icons, formatCount, lifespan, titleCaseSubject, formatList } from './dom.js';
+import * as wp from '../api/wikipedia.js';
+import { h, icons, formatCount, formatYear, lifespan, titleCaseSubject, formatList } from './dom.js';
 import { distinctiveSubjects } from '../graph/subjects.js';
 import { isFormOnly } from '../graph/genres.js';
 
@@ -243,9 +244,26 @@ export function createPanel(root, actions) {
     const meta = h('p', { class: 'meta', text: 'Loading details…' });
     const subjectsSlot = h('div');
     const genresSlot = h('div');
+    const themesSlot = h('div');
+    const awardsSlot = h('div');
+    const seriesSlot = h('div');
     const alsoSlot = h('div');
     const descriptionSlot = h('div');
-    const linkSlot = h('div');
+    const catalogueLink = h('div');
+    const articleLink = h('div');
+
+    // When the book appeared, from two sources that land in either order.
+    // Open Library's year is the earliest edition it has catalogued, which is
+    // often a reprint; Wikidata's is the first publication, so it wins.
+    const known = { year: node.year ?? null, fromWikidata: false, language: '', editions: 0, rating: null, error: '' };
+    const renderMeta = () => {
+      const parts = [];
+      if (known.year) parts.push(`First published ${formatYear(known.year)}${known.language ? ` in ${known.language}` : ''}`);
+      if (known.editions) parts.push(`${formatCount(known.editions)} editions`);
+      if (known.rating) parts.push(`rated ${known.rating} of 5`);
+      meta.textContent = parts.join(' · ') || known.error;
+    };
+    const prose = proseFor(descriptionSlot, token);
 
     const authorButtons = (node.authors || []).filter((a) => a.name);
     const byline = authorButtons.length
@@ -270,25 +288,30 @@ export function createPanel(root, actions) {
 
     const mapAuthor = authorButtons.find((a) => a.key);
 
-    show(
+    const head = h(
+      'div',
+      { class: 'detail-head' },
+      coverImage(ol.coverUrl(node.coverId, 'M'), `Cover of ${node.label}`),
       h(
         'div',
-        { class: 'detail-head' },
-        coverImage(ol.coverUrl(node.coverId, 'M'), `Cover of ${node.label}`),
-        h(
-          'div',
-          { class: 'detail-headings' },
-          h('p', { class: 'kind', text: 'Book' }),
-          h('h2', { class: 'panel-title', text: node.label }),
-          byline,
-        ),
+        { class: 'detail-headings' },
+        h('p', { class: 'kind', text: 'Book' }),
+        h('h2', { class: 'panel-title', text: node.label }),
+        byline,
       ),
+    );
+
+    show(
+      head,
       relation ? h('p', { class: 'relation', text: relation }) : null,
       meta,
       // What the book is about comes before where it sits on the map.
       descriptionSlot,
       subjectsSlot,
       genresSlot,
+      themesSlot,
+      awardsSlot,
+      seriesSlot,
       nodeActions(
         id,
         node,
@@ -296,30 +319,37 @@ export function createPanel(root, actions) {
       ),
       relatedSection(node, token),
       alsoSlot,
-      linkSlot,
+      h('div', { class: 'section' }, catalogueLink, articleLink),
     );
 
     ol.bookByKey(node.key)
       .then((book) => {
         if (token !== detailToken) return;
-        const parts = [];
-        if (book.year) parts.push(`First published ${book.year}`);
-        if (book.editions) parts.push(`${formatCount(book.editions)} editions`);
-        if (book.rating) parts.push(`rated ${book.rating} of 5`);
-        meta.textContent = parts.join(' · ') || '';
+        if (book.year && !known.fromWikidata) known.year = book.year;
+        known.editions = book.editions;
+        known.rating = book.rating;
+        renderMeta();
 
         const subjects = subjectList(book.subjects.length ? book.subjects : node.subjects);
         if (subjects) subjectsSlot.replaceWith(subjects);
 
-        if (book.description) descriptionSlot.replaceWith(h('p', { class: 'bio', text: book.description }));
-        else descriptionSlot.remove();
-        linkSlot.replaceWith(h('div', { class: 'section' }, externalLink(ol.workUrl(book.key), 'Open on Open Library')));
+        prose.catalogue(book.description);
+        catalogueLink.replaceWith(externalLink(ol.workUrl(book.key), 'Open on Open Library'));
       })
       .catch((err) => {
-        if (token === detailToken) meta.textContent = err.message || '';
+        if (token !== detailToken) return;
+        known.error = err.message || '';
+        renderMeta();
+        prose.catalogue('');
       });
 
-    loadGenres(node, token, genresSlot);
+    loadFacts(node, token, {
+      known,
+      renderMeta,
+      prose,
+      head,
+      slots: { genres: genresSlot, themes: themesSlot, awards: awardsSlot, series: seriesSlot, article: articleLink },
+    });
 
     if (mapAuthor) {
       ol.authorWorks(mapAuthor.key, 12)
@@ -351,49 +381,150 @@ export function createPanel(root, actions) {
   }
 
   /**
-   * Wikidata's genres for a book, as pills under the subject headings. They're
-   * a controlled vocabulary where the headings are whatever a cataloguer typed,
-   * so this is often the most exact thing said about a book anywhere on the
-   * panel. Absent quietly for the half of books Wikidata doesn't know.
+   * One paragraph about the thing selected. Open Library's own description is
+   * preferred, and Wikipedia's lead fills in when there is none. The two arrive
+   * in either order, so nothing is shown until it's clear which it will be.
    */
-  function loadGenres(node, token, slot) {
-    const render = (genres) => {
-      if (token !== detailToken) return;
-      const picks = (genres || []).filter((g) => g.label && !isFormOnly(g.label)).slice(0, 4);
-      if (!picks.length) {
-        slot.remove();
+  function proseFor(slot, token) {
+    const state = { catalogue: undefined, wikipedia: undefined, shown: false };
+    const settle = () => {
+      if (state.shown || token !== detailToken) return;
+      if (state.catalogue) {
+        state.shown = true;
+        slot.replaceWith(h('p', { class: 'bio', text: state.catalogue }));
         return;
       }
-      // Each genre is the way into a map of everything filed under it — a
-      // subject map from a vocabulary no library has. One without an ID is
-      // still worth showing, just not worth a click.
-      const pills = picks.map((genre) =>
-        genre.qid
-          ? h(
-              'button',
-              {
-                type: 'button',
-                class: 'tag',
-                title: `Map everything Wikidata files as “${genre.label}”`,
-                onClick: () => actions.exploreGenre(genre),
-              },
-              genre.label,
-            )
-          : h('span', { class: 'tag tag-static', text: genre.label }),
-      );
-      slot.replaceWith(tagGroup('Wikidata genres', pills, 'genres'));
+      if (state.catalogue === undefined || state.wikipedia === undefined) return;
+      state.shown = true;
+      if (state.wikipedia) slot.replaceWith(wikipediaProse(state.wikipedia));
+      else slot.remove();
     };
-    if (node.genres?.length) {
-      render(node.genres);
-      return;
-    }
-    if (!/^OL\d+W$/.test(node.key || '')) {
+    return {
+      catalogue(text) {
+        state.catalogue = text || '';
+        settle();
+      },
+      wikipedia(summary) {
+        state.wikipedia = summary || null;
+        settle();
+      },
+    };
+  }
+
+  /** Wikipedia's opening paragraph, credited: the text is theirs, under CC BY-SA. */
+  const wikipediaProse = (summary) =>
+    h(
+      'div',
+      {},
+      h('p', { class: 'bio', text: summary.extract }),
+      h('p', { class: 'credit' }, 'From ', externalLink(summary.url, 'Wikipedia'), '.'),
+    );
+
+  /**
+   * A row of pills from one of Wikidata's vocabularies, each the way into a
+   * map of everything filed under it — a subject map from a vocabulary no
+   * library has. One without an ID is still worth showing, just not a click.
+   */
+  function renderPills(slot, heading, items, kind, className) {
+    if (!items.length) {
       slot.remove();
       return;
     }
-    wd.genresFor([node.key])
-      .then((found) => render(found?.get(node.key)))
-      .catch(() => slot.remove());
+    const verb = {
+      genre: 'Map everything Wikidata files as',
+      theme: 'Map everything Wikidata says is about',
+      award: 'Map everything that won',
+    }[kind];
+    const pills = items.map((item) =>
+      item.qid
+        ? h(
+            'button',
+            { type: 'button', class: 'tag', title: `${verb} “${item.label}”`, onClick: () => actions.exploreCollection(kind, item) },
+            item.label,
+            item.year ? h('span', { class: 'tag-year', text: formatYear(item.year) }) : null,
+          )
+        : h('span', { class: 'tag tag-static', text: item.label }),
+    );
+    slot.replaceWith(tagGroup(heading, pills, className));
+  }
+
+  /** What a writer won, as quiet pills. These aren't maps: most prizes for a career go to a person, not a book. */
+  function renderAwards(slot, awards) {
+    if (!awards.length) {
+      slot.remove();
+      return;
+    }
+    const pills = awards.map((award) =>
+      h(
+        'span',
+        { class: 'tag tag-static' },
+        award.label,
+        award.years?.length ? h('span', { class: 'tag-year', text: award.years.map(formatYear).join(', ') }) : null,
+      ),
+    );
+    slot.replaceWith(tagGroup('Awards', pills, 'awards'));
+  }
+
+  /**
+   * Wikidata's account of a book, laid over the catalogue's: its genres as
+   * pills under the subject headings, what it's about in Wikidata's own terms,
+   * what it won, the series it belongs to, the year and language it first
+   * appeared in, and — by way of Wikidata's link to the article — Wikipedia's
+   * opening paragraph when Open Library has no description. Absent quietly for
+   * the half of books Wikidata doesn't know.
+   */
+  function loadFacts(node, token, { known, renderMeta, prose, head, slots }) {
+    const done = (facts) => {
+      if (token !== detailToken) return;
+      const genres = node.genres?.length ? node.genres : facts?.genres || [];
+      renderPills(slots.genres, 'Wikidata genres', genres.filter((g) => g.label && !isFormOnly(g.label)).slice(0, 4), 'genre', 'genres');
+      renderPills(slots.themes, 'Wikidata themes', (facts?.themes || []).slice(0, 5), 'theme', 'themes');
+      renderPills(slots.awards, 'Awards', (facts?.awards || []).slice(0, 4), 'award', 'awards');
+
+      if (facts?.series) {
+        const { label, ordinal } = facts.series;
+        slots.series.replaceWith(
+          h('p', { class: 'hint series', text: ordinal ? `Book ${ordinal} in the ${label} series.` : `Part of the ${label} series.` }),
+        );
+      } else {
+        slots.series.remove();
+      }
+
+      if (facts?.year) {
+        known.year = facts.year;
+        known.fromWikidata = true;
+        // Only a language other than English is worth a word: that a book was
+        // written in Polish is the fact; that it was written in English isn't.
+        known.language = facts.language && !/english/i.test(facts.language.label) ? facts.language.label : '';
+        renderMeta();
+      }
+
+      if (!facts?.article) {
+        slots.article.remove();
+        prose.wikipedia(null);
+        return;
+      }
+      slots.article.replaceWith(externalLink(facts.article, 'Read on Wikipedia'));
+      wp.summaryFor(facts.article)
+        .then((summary) => {
+          if (token !== detailToken) return;
+          prose.wikipedia(summary);
+          // Wikipedia's picture stands in when Open Library has no cover.
+          if (summary?.thumbnail && !node.coverId && !head.querySelector('.cover')) {
+            const figure = coverImage(summary.thumbnail, `Cover of ${node.label}`);
+            if (figure) head.prepend(figure);
+          }
+        })
+        .catch(() => prose.wikipedia(null));
+    };
+
+    if (!/^OL\d+W$/.test(node.key || '')) {
+      done(null);
+      return;
+    }
+    wd.workFacts(node.key)
+      .then(done)
+      .catch(() => done(null));
   }
 
   // ---------- Author ----------
@@ -402,11 +533,33 @@ export function createPanel(root, actions) {
     const token = ++detailToken;
     const meta = h('p', { class: 'meta', text: 'Loading details…' });
     const subjectsSlot = h('div');
+    const awardsSlot = h('div');
     const influenceSlot = h('div');
     const worksSlot = h('section', { class: 'section' }, h('h3', { text: 'Best known for' }), skeletonList());
     const bioSlot = h('div');
     const linkSlot = h('div');
     const headingSlot = h('div', { class: 'detail-head' });
+    const prose = proseFor(bioSlot, token);
+
+    // Once Wikidata has answered: the prizes, and Wikipedia's paragraph when
+    // Open Library had no biography, with its portrait when there was no photo.
+    const onFacts = (facts) => {
+      renderAwards(awardsSlot, facts?.awards || []);
+      if (!facts?.article) {
+        prose.wikipedia(null);
+        return;
+      }
+      wp.summaryFor(facts.article)
+        .then((summary) => {
+          if (token !== detailToken) return;
+          prose.wikipedia(summary);
+          if (summary?.thumbnail && !headingSlot.querySelector('.portrait')) {
+            const photo = coverImage(summary.thumbnail, `Photograph of ${node.label}`, 'portrait');
+            if (photo) headingSlot.prepend(photo);
+          }
+        })
+        .catch(() => prose.wikipedia(null));
+    };
 
     headingSlot.append(
       h(
@@ -424,6 +577,7 @@ export function createPanel(root, actions) {
       // Who the writer is comes before what they're filed under.
       bioSlot,
       subjectsSlot,
+      awardsSlot,
       nodeActions(id, node, [button('Trace their influence', () => actions.openInfluence(node.key, node.label))]),
       influenceSlot,
       worksSlot,
@@ -442,15 +596,15 @@ export function createPanel(root, actions) {
           meta.textContent = span || '';
           const photo = coverImage(ol.authorPhotoUrl(author.photoId, 'M'), `Photograph of ${author.name}`, 'portrait');
           if (photo) headingSlot.prepend(photo);
-          if (author.bio) bioSlot.replaceWith(h('p', { class: 'bio', text: author.bio }));
-          else bioSlot.remove();
+          prose.catalogue(author.bio);
           linkSlot.replaceWith(h('div', { class: 'section' }, externalLink(ol.authorUrl(author.key), 'Open on Open Library')));
-          loadInfluence(author.wikidata || node.qid, node, token, influenceSlot, meta);
+          loadInfluence(author.wikidata || node.qid, node, token, influenceSlot, meta, onFacts);
         })
         .catch(() => {
           if (token === detailToken) {
             meta.textContent = '';
-            loadInfluence(node.qid, node, token, influenceSlot, meta);
+            prose.catalogue('');
+            loadInfluence(node.qid, node, token, influenceSlot, meta, onFacts);
           }
         });
 
@@ -491,9 +645,9 @@ export function createPanel(root, actions) {
     } else {
       meta.textContent = 'Not on Open Library, so there are no books to show here.';
       worksSlot.remove();
-      bioSlot.remove();
+      prose.catalogue('');
       linkSlot.remove();
-      loadInfluence(node.qid, node, token, influenceSlot, meta);
+      loadInfluence(node.qid, node, token, influenceSlot, meta, onFacts);
     }
   }
 
@@ -502,9 +656,10 @@ export function createPanel(root, actions) {
    * filed under, and the two lists that are the reason this app talks to
    * Wikidata at all.
    */
-  function loadInfluence(qid, node, token, slot, meta) {
+  function loadInfluence(qid, node, token, slot, meta, onFacts = () => {}) {
     if (!qid) {
       slot.remove();
+      onFacts(null);
       return;
     }
     slot.replaceWith(
@@ -514,6 +669,7 @@ export function createPanel(root, actions) {
     wd.authorFacts(qid)
       .then((facts) => {
         if (token !== detailToken) return;
+        onFacts(facts);
         if (!facts) {
           slot.replaceChildren(
             h('h3', { text: 'Influence' }),
@@ -587,7 +743,9 @@ export function createPanel(root, actions) {
         slot.replaceChildren(...parts.filter(Boolean));
       })
       .catch(() => {
-        if (token === detailToken) slot.remove();
+        if (token !== detailToken) return;
+        onFacts(null);
+        slot.remove();
       });
   }
 

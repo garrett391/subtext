@@ -34,6 +34,8 @@ export const icons = {
   subject: svg('<path d="M4 7h16M4 12h11M4 17h7"/>'),
   // The arrow of descent, which is what an influence claim is.
   influence: svg('<path d="M4 12h13"/><path d="m13 7.5 4.5 4.5-4.5 4.5"/>'),
+  // A rosette, for what a book won.
+  award: svg('<circle cx="12" cy="9" r="4.6"/><path d="m8.6 12.6-1.6 8 5-2.7 5 2.7-1.6-8"/>'),
 };
 
 export const formatCount = (n) =>
@@ -46,6 +48,9 @@ export function yearOf(date) {
   const match = /\d{4}/.exec(String(date || ''));
   return match ? match[0] : '';
 }
+
+/** Years as people write them. Wikidata counts the years before the common era as negative. */
+export const formatYear = (year) => (year < 0 ? `${-year} BCE` : String(year));
 
 export function lifespan(birth, death) {
   const from = yearOf(birth);

@@ -2,11 +2,11 @@
 
 Explore books as a map. Search for a book, a writer, or a subject, and Subtext draws a network where things catalogued alike sit close together and share colours.
 
-Book maps, author maps, subject maps, genre maps, and influence maps — who read whom — plus paths that connect any two books.
+Book maps, author maps, subject maps, genre maps, award maps, theme maps, and influence maps — who read whom — plus paths that connect any two books.
 
 ## Setup
 
-You need [Node.js](https://nodejs.org) 20 or newer. That's all: Open Library and Wikidata are both open, so there's no account to make and no API key to paste.
+You need [Node.js](https://nodejs.org) 20 or newer. That's all: Open Library, Wikidata and Wikipedia are all open, so there's no account to make and no API key to paste.
 
 ```bash
 npm install
@@ -19,12 +19,15 @@ Open <http://127.0.0.1:5173>.
 
 - **Search** for a book, a writer, or a subject. Pick a subject to add it as a chip, and add up to four to combine them, like `graphic novels` + `autobiography`.
 - Anything already drawn shows up under **On this map** at the top of the results, with no network call. Picking it jumps to that dot instead of starting a new map — handy once a map gets dense, or on touch where there's no hover.
+- Type the name of a genre or a prize — `planetary romance`, `Booker Prize` — and it turns up under **On Wikidata**, as a map of everything filed under it.
 - **Hover** a dot to see its neighbourhood. **Click** it for details, subjects, and a ranked list of everything else filed under the same headings.
 - That list is the full ranking, not only what the map drew, so it doubles as a way to read a map on a phone where few labels fit. Rows already on the map take you to them; rows that aren't have a **+** and get added right where you are, which makes "show me more like this" one at a time instead of ten.
 - **Double-click** a dot (or use "Show more like this") to grow the map outward from it.
 - **Show me something different** jumps to whatever sits farthest from the dot you selected.
 - Click a subject on any book or writer to map that subject. Click a book under "Best known for" to switch to a book map.
-- Under a book's subjects, the line *Wikidata files it as …* names its genres. Click one to map everything Wikidata files under it.
+- Under a book's subjects, up to three rows of pills come from Wikidata: its **genres**, its **themes** (what Wikidata gives as the book's main subject), and the **awards** it won, each with the year. Click any of them to map everything Wikidata files under it — every planetary romance, everything about totalitarianism, every Hugo winner.
+- A book's line of small print says when it was first published and, if it wasn't English, in what language: *First published 1961 in Polish*. That comes from Wikidata too, because the catalogue's earliest year is usually a reprint's.
+- Where Open Library has no description of a book or a writer, Wikipedia's opening paragraph stands in, credited and linked.
 - The overview panel lists everything on the map, ranked by closeness to your starting point. Tap a row to go to that dot.
 - **Copy as a reading list** puts the whole map on the clipboard as a numbered list with Open Library links — a map is already a ranked list of things to read, so it may as well be able to become a handout.
 - On a phone, the details panel is a bottom sheet. Drag the grip at its top to resize it, or tap the grip to collapse it down to the grip alone and get nearly the whole screen for the map. It rests at three heights: peek, half, and full.
@@ -46,7 +49,7 @@ Paths have their own URLs, so `#path/book/OL2163089W/to/book/OL3521805W` can be 
 
 ## How it works
 
-**Data.** [Open Library](https://openlibrary.org) supplies titles, writers, covers, and the subject headings every map is built from. [Wikidata](https://www.wikidata.org) supplies the influence arrows and a second vocabulary of genres. Neither needs a key.
+**Data.** [Open Library](https://openlibrary.org) supplies titles, writers, covers, and the subject headings every map is built from. [Wikidata](https://www.wikidata.org) supplies the influence arrows, three controlled vocabularies — genres, main subjects, awards — and the year and language a book first appeared in. [Wikipedia](https://en.wikipedia.org) supplies a paragraph of prose where the catalogue has none. None needs a key.
 
 **Similarity.** Open Library has no "books like this book" endpoint, so similarity is computed rather than looked up. It rests mostly on subjects, with where a book is shelved and how long it is as second opinions. Every work carries a list of subjects, and three things happen to that list before it's usable:
 
@@ -68,13 +71,23 @@ Cataloguers disagree, so the commonest number wins: the real record for *The Ste
 
 **Genres.** Wikidata files works under a controlled vocabulary of genres, one item per genre, where a library heading is whatever a cataloguer typed. That catches what cataloguing misses: *Solaris* and *Dune* are both `planetary romance`, *Frankenstein* is `epistolary novel` and `body horror literature`, and no library heading says any of that. The join is the same Open Library ID that finds a writer for the influence map, so a whole map's worth of books is looked up in one batched query.
 
-Run backwards, the same property is a map of its own: see *Genre maps* below.
+Run backwards, the same property is a map of its own: see *Collection maps* below.
 
 It reaches roughly half a map — four books in ten resolve to an item, five in six of those carry a genre — so it is additive only. A pair that shares a genre is lifted towards each other; a pair that can't be checked is left exactly as the catalogue scored it, and a pair that was checked and shares nothing is left alone too, because a Wikidata genre list is usually one entry long and a missing match says more about the list than about the books. Genres describing the form rather than the story (`novel`, `graphic novel`) count for nothing, and the rest are weighted by how many books on the map carry them: `science fiction` on a map seeded from *Dune* is the common ground, `planetary romance` on two of them is the finding. The map is drawn from the catalogue first and lifted once Wikidata answers, the same way influence arrives.
 
-**Genre maps.** The same Wikidata property run backwards — everything filed as `planetary romance` that also has an Open Library work ID — is a subject map from a vocabulary no library has, and it reaches every book Wikidata knows rather than the half of a map that happens to resolve. One query returns the works, best known first, judged by how many Wikipedias have an article on each; Open Library's search accepts a batch of work IDs OR'd together, so the top sixty are read back with subjects, call numbers and page counts in two round trips, and then linked the way every other map is linked. Dots are sized by fame rather than by closeness, since every book here answers to the genre equally, and the size is read on a log scale because one book sits on a hundred Wikipedias and most sit on a handful.
+**Collection maps.** Any of Wikidata's vocabularies run backwards — everything filed as `planetary romance` that also has an Open Library work ID — is a subject map from a vocabulary no library has, and it reaches every book Wikidata knows rather than the half of a map that happens to resolve. Three of them are drawn the same way:
+
+- *Genre maps* (`#genre/Q2630193`) come from the genre property above.
+- *Award maps* (`#award/Q255032`) come from "award received", which is where Wikidata records that *Dune* won the Hugo Award for Best Novel in 1966. The Hugo, the Nebula, the Booker, the Pulitzer and the Prix Goncourt each have fifty to ninety winners with an Open Library record. Canonical lists are recorded the same way, so *Le Monde's 100 Books of the Century* is an award map too; a number in the name is how one is told from a prize. Where Wikidata recorded the year, the panel lists the winners in the order they won.
+- *Theme maps* (`#theme/Q128135`) come from "main subject": everything Wikidata says is *about* totalitarianism, or orphans, or artificial intelligence, fiction and non-fiction alike. Main subjects are recorded on about a quarter of the books Wikidata links to Open Library, so these maps are smaller and lean towards the well known.
+
+One query returns the works, best known first, judged by how many Wikipedias have an article on each; Open Library's search accepts a batch of work IDs OR'd together, so the top sixty are read back with subjects, call numbers and page counts in two round trips, and then linked the way every other map is linked. Dots are sized by fame rather than by closeness, since every book here answers to the collection equally, and the size is read on a log scale because one book sits on a hundred Wikipedias and most sit on a handful.
 
 Two things need cleaning on the way. Wikidata records an Open Library ID on writers and on single editions as well as on works, and both are left out, since this map is books. And one item can carry several work IDs — Dune's carries three, one of which is Dune Messiah — so the work whose catalogue title matches the item's name is the one drawn, and the rest are dropped rather than duplicated. Open Library also merges duplicate records and leaves redirects behind, which Wikidata goes on citing: two of Dune's three IDs lead, by way of each other, to a fourth that only the search index knows. An item that comes back with nothing, or with a title that isn't its own, has its dead IDs followed to wherever they went, a few at a time.
+
+**One book, on Wikidata.** Selecting a book asks Wikidata one more question, in one query: when it was first published, in what language, what it's about, what it won, what series it belongs to, and where its Wikipedia article is. The first-publication date replaces the catalogue's year on the panel, because Open Library's earliest year is the earliest *edition* it has catalogued, which for anything older than a few decades is a reprint. The language is only mentioned when it isn't English — that *Solaris* was written in Polish is the fact; that *Dune* was written in English isn't — and where Wikidata lists two, as it does for *Nineteen Eighty-Four* (English and Newspeak), the one with the lower item number wins, since the established languages were entered first. Awards come best known first, judged the same way books are.
+
+**Wikipedia.** Open Library's descriptions are whatever a contributor pasted in, and most works have none. Wikipedia's lead paragraph is edited prose, and its summary endpoint hands it over in one small response. Subtext only ever asks for an article Wikidata has already matched to the book or writer in hand, so nothing is guessed from a title, and it only fills gaps: a description Open Library does have is kept. The text is Wikipedia's, under CC BY-SA, and is credited and linked where it appears. When Open Library has no cover or photograph either, Wikipedia's picture stands in.
 
 **Building a map.** Subtext takes the subjects that make the seed specific, reads what else is filed under each, and ranks what comes back on two things: how much of the seed's subject profile it shares, and how many of those subject lists it turned up in, and how high. Because every candidate arrives with its own subject list, the links *between* candidates cost nothing extra — a recommendation API would need one request per connection. Each dot keeps only its strongest handful of links, which is what separates a map you can read from a ball of yarn.
 
@@ -90,9 +103,9 @@ The budget counts books opened, not requests: 12 by default, up to 30. Opening a
 - *Bridges* are dots with high betweenness centrality whose neighbours span more than one cluster — usually the most interesting thing on a map.
 - *Paths* use Dijkstra's algorithm, where a strong resemblance counts as a short distance.
 
-**Caching.** Results are saved in your browser (IndexedDB) for a week, so maps you've seen load instantly and two free services aren't asked the same question twice. Requests are paced at about four a second. You can clear saved results from the info button in the top bar.
+**Caching.** Results are saved in your browser (IndexedDB) for a week, so maps you've seen load instantly and three free services aren't asked the same question twice. A service that couldn't be reached is the exception: a shrug isn't remembered, so a busy afternoon at Wikidata's query service doesn't leave a map without its genres for a week. Requests are paced at about four a second. You can clear saved results from the info button in the top bar.
 
-**Addresses.** Books and writers live in the URL by their Open Library ID rather than their name, because titles collide constantly, and genres by their Wikidata ID. A URL can also name something instead — `#book/q/Watchmen`, `#author/q/Ursula K. Le Guin`, `#genre/q/planetary romance` — which gets resolved once and rewritten to the stable form.
+**Addresses.** Books and writers live in the URL by their Open Library ID rather than their name, because titles collide constantly, and genres, awards and themes by their Wikidata ID. A URL can also name something instead — `#book/q/Watchmen`, `#author/q/Ursula K. Le Guin`, `#genre/q/planetary romance`, `#award/q/Booker Prize`, `#theme/q/totalitarianism` — which gets resolved once and rewritten to the stable form. Wikidata's one-line descriptions do the disambiguating: "fantasy" is a genre, a film and a band.
 
 ## Project structure
 
@@ -100,18 +113,19 @@ The budget counts books opened, not requests: 12 by default, up to 30. Opening a
 src/
   api/
     openlibrary.js  Open Library client: pacing, caching, error messages, clean data shapes
-    wikidata.js     Influence claims, genres, and everything filed under a genre, over SPARQL, with graceful failure
+    wikidata.js     Influence, genres, awards, themes, and what one book is — over SPARQL, with graceful failure
+    wikipedia.js    The opening paragraph of an article Wikidata has already named
     cache.js        Memory and IndexedDB cache
   graph/
     subjects.js     Subject cleaning, faceting and weighting — the similarity model
     classification.js  Library of Congress and Dewey numbers, read for what they mean where
     genres.js       Wikidata genres as an additive third opinion: form words dropped, rarity weighted
-    build.js        Builds book, author, subject, genre, influence and path maps; grows maps from a dot
+    build.js        Builds book, author, subject, collection, influence and path maps; grows maps from a dot
     analysis.js     Clusters, bridges, paths, farthest dot
     color.js        Spectral colouring
   ui/
     graphView.js    D3 rendering, force layout, directed influence arrows, zoom, hover, labels
-    search.js       Search box with book, author and subject results
+    search.js       Search box with book, author, subject, genre and award results
     panel.js        Details panel
     sheet.js        Bottom-sheet behaviour for the panel on small screens
     about.js        Where the data comes from, and clearing the cache
@@ -122,7 +136,7 @@ src/
 test/
   run.mjs           The subject model and every map builder, against a fake catalogue
   ui.mjs            The interface booted in jsdom and driven through real flows
-  harness.mjs       Stand-in Open Library and Wikidata
+  harness.mjs       Stand-in Open Library, Wikidata and Wikipedia
 ```
 
 ## Tests
@@ -131,7 +145,7 @@ test/
 npm test
 ```
 
-Neither service is contacted. `test/harness.mjs` answers in the same shapes the real ones do, which means the scoring, the weaving, the direction of every influence arrow, and the whole routing-to-panel path are all exercised offline. There's also `npm run render`, which dumps the empty-state sketch and a live map to SVG so the drawing code can be looked at rather than only asserted about.
+None of the three services is contacted. `test/harness.mjs` answers in the same shapes the real ones do, which means the scoring, the weaving, the direction of every influence arrow, and the whole routing-to-panel path are all exercised offline. There's also `npm run render`, which dumps the empty-state sketch and a live map to SVG so the drawing code can be looked at rather than only asserted about.
 
 ## Known limits
 
@@ -139,14 +153,10 @@ Neither service is contacted. `test/harness.mjs` answers in the same shapes the 
 - Subject headings are phrased in ways nobody guesses — half of comics history sits under `Comic books, strips, etc`. The search box carries a starting vocabulary of headings that do return books, and shows how many books are behind each suggestion.
 - Shared subjects are a real signal but a different one from what readers think goes together. Two books can be catalogued identically and read nothing alike.
 - Call numbers are assigned one edition at a time and disagree. Taking the commonest throws out the worst of it, but a book with a single odd record is filed by that record. Where the LC schedule wasn't checked, ranges err towards reading a number as an author rather than a topic, which loses signal rather than inventing it.
-- Wikidata's influence coverage is thin outside well-documented writers, and absent for most living ones. Its genres reach about half of any map, and lean the same way: the famous corner of a map gets pulled together a little more than the rest. A genre map inherits the lean outright — it is the well-known corner, ranked by how well known.
+- Wikidata's influence coverage is thin outside well-documented writers, and absent for most living ones. Its genres reach about half of any map, and lean the same way: the famous corner of a map gets pulled together a little more than the rest. A collection map inherits the lean outright — it is the well-known corner, ranked by how well known. Themes reach about a quarter of the books genres do, and an award only reaches what won it: a prize given to a writer rather than a book, like the Nobel, comes back empty.
+- Wikipedia's paragraph is the lead of the article, which for a famous book can run to a screenful; it's clamped to a few lines. It only appears where Wikidata has linked the article, so a book Wikidata doesn't know gets neither.
 - Open Library's search can be slow under load. Requests time out after twenty seconds with a message saying so.
 
 ## Next steps
 - **Bugs:** 
     * 
-- **Next:** Subject maps that show writers as well as books, so a territory can be read either way without switching maps.
-- **Then:** Use Open Library's subject facets to suggest where to go next from a subject map — the headings that keep company with the one you're on.
-- **Then:** Influence maps seeded from a book rather than a writer, following the book's author but weighting toward writers working in the same form.
-- **Stretch:** Let a map hold both books and writers at once, with the links between them drawn differently from the links among them. Bigger lift: today's colouring assumes one kind of thing per map.
-- **Later:** Editions and translations as a dimension of their own, so a map can show how a book travelled rather than only what it sits beside.

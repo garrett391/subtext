@@ -19,7 +19,11 @@ function getStore() {
   return store;
 }
 
-export async function cached(key, fetcher) {
+/**
+ * `keepNull` is for the rare fetcher whose null is an answer rather than a
+ * shrug — a record that has been deleted — and so worth remembering.
+ */
+export async function cached(key, fetcher, { keepNull = false } = {}) {
   if (memory.has(key)) return memory.get(key);
 
   const db = getStore();
@@ -40,6 +44,13 @@ export async function cached(key, fetcher) {
   memory.set(key, pending);
   try {
     const value = await pending;
+    // Null is how the Wikidata and Wikipedia clients say "couldn't ask", and a
+    // shrug isn't worth remembering for a week: a busy afternoon at the query
+    // service would otherwise leave a map without its genres until next Tuesday.
+    if (value == null && !keepNull) {
+      memory.delete(key);
+      return value;
+    }
     memory.set(key, value);
     if (db) set(key, { t: Date.now(), v: value }, db).catch(() => {});
     return value;

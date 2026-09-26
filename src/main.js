@@ -5,7 +5,7 @@ import {
   buildBookMap,
   buildAuthorMap,
   buildSubjectMap,
-  buildGenreMap,
+  buildCollectionMap,
   buildInfluenceMap,
   buildPathMap,
   expandNode,
@@ -27,7 +27,7 @@ import { createPanel } from './ui/panel.js';
 import { createStatus } from './ui/status.js';
 import { createAbout } from './ui/about.js';
 import { createSheet } from './ui/sheet.js';
-import { icons, formatList, titleCaseSubject } from './ui/dom.js';
+import { icons, formatList, formatYear, titleCaseSubject } from './ui/dom.js';
 import { createSpectrum } from './graph/color.js';
 
 const $ = (id) => document.getElementById(id);
@@ -46,7 +46,7 @@ const app = {
   pathShown: false,
   converted: [],
   counts: [],
-  genre: null,
+  collection: null,
   token: 0,
   trail: [],
 };
@@ -64,7 +64,7 @@ const status = createStatus($('status'));
 
 const panel = createPanel($('panel'), {
   exploreSubject: (subject) => navigate({ type: 'subject', subjects: [subject] }),
-  exploreGenre: (genre) => navigate({ type: 'genre', qid: genre.qid }),
+  exploreCollection: (kind, item) => navigate({ type: kind, qid: item.qid }),
   recenter,
   expand,
   startPath,
@@ -84,6 +84,7 @@ const panel = createPanel($('panel'), {
 const search = createSearch($('search'), {
   onPickBook: (key) => openBook(key),
   onPickAuthor: (key) => openAuthor(key),
+  onPickCollection: (kind, qid) => navigate({ type: kind, qid }),
   onPickNode: (id) => selectNode(id, { focus: true }),
   onPickEnd: finishPathWith,
   findOnMap,
@@ -118,8 +119,10 @@ const sheet = createSheet($('panel'), {
 const enc = encodeURIComponent;
 const WORK_ID = /^OL\d+W$/;
 const AUTHOR_ID = /^OL\d+A$/;
-// Genres are Wikidata items, so they're addressed by Wikidata's ID.
+// Genres, awards and themes are Wikidata items, so they're addressed by
+// Wikidata's ID, under a route named for the kind: #genre, #award, #theme.
 const ITEM_ID = /^Q\d+$/;
+const isCollection = (type) => wd.isCollectionKind(type);
 
 function routeToHash(route) {
   if (route.type === 'book') {
@@ -134,8 +137,8 @@ function routeToHash(route) {
   if (route.type === 'path') {
     return `#path/${route.from.kind}/${route.from.key}/to/${route.to.kind}/${route.to.key}`;
   }
-  if (route.type === 'genre') {
-    return route.qid ? `#genre/${route.qid}` : `#genre/q/${enc(route.query)}`;
+  if (isCollection(route.type)) {
+    return route.qid ? `#${route.type}/${route.qid}` : `#${route.type}/q/${enc(route.query)}`;
   }
   return `#subject/${route.subjects.map(enc).join('/')}`;
 }
@@ -175,9 +178,10 @@ function hashToRoute(hash) {
     }
     return null;
   }
-  if (parts[0] === 'genre') {
-    if (parts[1] === 'q' && parts[2]) return { type: 'genre', query: parts[2] };
-    if (ITEM_ID.test(parts[1] || '')) return { type: 'genre', qid: parts[1] };
+  if (isCollection(parts[0])) {
+    const type = parts[0];
+    if (parts[1] === 'q' && parts[2]) return { type, query: parts[2] };
+    if (ITEM_ID.test(parts[1] || '')) return { type, qid: parts[1] };
     return null;
   }
   if (parts[0] === 'subject') {
@@ -258,6 +262,19 @@ function recenter(id) {
 
 const kindPlural = () => (app.nodeKind === 'author' ? 'writers' : 'books');
 
+// An award's label doubles as a list's: "Le Monde's 100 Books of the Century"
+// is recorded the same way as the Booker. A number in the name is the tell.
+const isList = (label) => /\b\d{2,4}\b/.test(label) || /\b(list|canon)\b/i.test(label);
+
+function collectionTitle(kind, label) {
+  if (kind === 'award') {
+    if (!label) return 'Winners of this award';
+    return isList(label) ? `Books on ${label}` : `Winners of the ${label}`;
+  }
+  if (kind === 'theme') return `Books about ${label || 'this'}`;
+  return `Books Wikidata files as ${label || 'this genre'}`;
+}
+
 function titlesFor(route, result = {}) {
   if (route.type === 'book') {
     return {
@@ -268,7 +285,7 @@ function titlesFor(route, result = {}) {
   if (route.type === 'author') return { title: `Writers near ${result.seedLabel || route.query || 'this one'}` };
   if (route.type === 'influence') return { title: `Influence around ${result.seedLabel || route.query || 'this writer'}` };
   if (route.type === 'path') return { title: `From ${result.fromLabel || 'one book'} to ${result.toLabel || 'another'}` };
-  if (route.type === 'genre') return { title: `Books Wikidata files as ${result.seedLabel || route.query || 'this genre'}` };
+  if (isCollection(route.type)) return { title: collectionTitle(route.type, result.seedLabel || route.query || '') };
   return { title: `Books filed under ${formatList(route.subjects.map(titleCaseSubject))}` };
 }
 
@@ -295,14 +312,15 @@ async function resolveRoute(route) {
     }
     return { type: route.type, key: author.key };
   }
-  if (route.type === 'genre' && route.query) {
-    const genre = await wd.genreByName(route.query);
-    if (!genre) {
+  if (isCollection(route.type) && route.query) {
+    const item = await wd.collectionByName(route.type, route.query);
+    if (!item) {
+      const noun = route.type === 'theme' ? 'subject' : route.type;
       throw new EmptyMapError(
-        `Wikidata has no genre called “${route.query}”. Open any book and pick one of its Wikidata genres.`,
+        `Wikidata has no ${noun} called “${route.query}”. Open any book and pick one of the Wikidata ${noun}s on it.`,
       );
     }
-    return { type: 'genre', qid: genre.qid };
+    return { type: route.type, qid: item.qid };
   }
   return route;
 }
@@ -321,7 +339,7 @@ async function load(incoming) {
     pathShown: false,
     converted: [],
     counts: [],
-    genre: null,
+    collection: null,
     nodeKind: incoming.type === 'author' || incoming.type === 'influence' ? 'author' : 'book',
   });
   app.analysis = { communities: {}, sceneCount: 0, bridges: [] };
@@ -375,7 +393,7 @@ async function load(incoming) {
     else if (route.type === 'influence') result = await buildInfluenceMap(route.key, ctx);
     else if (route.type === 'path') {
       result = await buildPathMap(route.from, route.to, ctx, { budget: route.budget || PATH_BUDGET.default });
-    } else if (route.type === 'genre') result = await buildGenreMap(route.qid, ctx);
+    } else if (isCollection(route.type)) result = await buildCollectionMap(route.type, route.qid, ctx);
     else result = await buildSubjectMap(route.subjects, ctx);
     ctx.check();
 
@@ -386,7 +404,7 @@ async function load(incoming) {
       seedSubtitle: result.seedSubtitle ?? null,
       counts: result.counts || [],
       converted: result.converted || [],
-      genre: result.genre || null,
+      collection: result.collection || null,
     });
     setTitles(titlesFor(app.route, result));
 
@@ -477,13 +495,21 @@ function seedWeight(id) {
   return edge ? app.graph.getEdgeAttribute(edge, 'weight') : null;
 }
 
-// On a genre map every book answers to the genre equally, so what's worth
-// saying is how widely known it is, which is also what sized the dot.
-function genreMatch(node) {
-  const label = app.seedLabel || 'this genre';
+// On a collection map every book answers to the collection equally, so what's
+// worth saying is how widely known it is, which is also what sized the dot.
+function collectionMatch(node) {
+  const kind = app.route.type;
+  const label = app.seedLabel || `this ${kind}`;
+  let claim = `Wikidata files it as ${label}.`;
+  if (kind === 'award') {
+    if (isList(label)) claim = `On ${label}.`;
+    else claim = node.awarded ? `Won the ${label} in ${formatYear(node.awarded)}.` : `Won the ${label}.`;
+  } else if (kind === 'theme') {
+    claim = `Wikidata gives its main subject as ${label}.`;
+  }
   const n = node.sitelinks || 0;
-  if (!n) return `Wikidata files it as ${label}.`;
-  return `Wikidata files it as ${label}. Wikipedia covers it in ${n === 1 ? 'one language' : `${n} languages`}.`;
+  if (!n) return claim;
+  return `${claim} Wikipedia covers it in ${n === 1 ? 'one language' : `${n} languages`}.`;
 }
 
 function subjectMatch(node) {
@@ -549,7 +575,7 @@ function relationText(id, node) {
     return app.route.type === 'book' ? 'This map starts from this book.' : 'This map starts from this writer.';
   }
   if (app.route.type === 'subject') return subjectMatch(node);
-  if (app.route.type === 'genre') return genreMatch(node);
+  if (isCollection(app.route.type)) return collectionMatch(node);
   const w = seedWeight(id);
   if (w != null) return `${percent(w)} subject overlap with ${app.seedLabel}.${sharedLine(id)}`;
   const hops = app.seedId ? hopsBetween(app.graph, app.seedId, id) : null;
@@ -562,8 +588,9 @@ function describe(d) {
   else if (app.route?.type === 'influence') note = d.seed ? 'Start of this map' : influenceRelation(d.id, d);
   else if (d.seed) note = 'Start of this map';
   else if (app.route?.type === 'subject') note = subjectMatch(d);
-  else if (app.route?.type === 'genre') note = d.year ? `First published ${d.year}` : null;
-  else {
+  else if (isCollection(app.route?.type)) {
+    note = d.awarded ? `${app.seedLabel}, ${formatYear(d.awarded)}` : d.year ? `First published ${d.year}` : null;
+  } else {
     const w = seedWeight(d.id);
     if (w != null) note = `${percent(w)} subject overlap with ${app.seedLabel}`;
   }
@@ -580,11 +607,14 @@ function overviewNote() {
       : '';
     return `${sizes}Bigger dots answer to more of your subjects. Lines join books catalogued alike.`;
   }
-  if (app.route.type === 'genre') {
-    const { known = 0, truncated = false, drawn = 0 } = app.genre || {};
+  if (isCollection(app.route.type)) {
+    const { kind = 'genre', label = '', known = 0, truncated = false, drawn = 0 } = app.collection || {};
     const count = `${truncated ? 'At least ' : ''}${known.toLocaleString('en')} ${known === 1 ? 'book' : 'books'}`;
+    let carry = 'carry this genre';
+    if (kind === 'award') carry = isList(label) ? 'are on this list' : 'won this award';
+    else if (kind === 'theme') carry = 'have this as a main subject';
     const which = drawn < known ? `The ${drawn} best known are drawn.` : 'All of them are drawn.';
-    return `${count} on Wikidata carry this genre and an Open Library record. ${which} Bigger dots are books Wikipedia covers in more languages. Lines join books catalogued alike.`;
+    return `${count} on Wikidata ${carry} and have an Open Library record. ${which} Bigger dots are books Wikipedia covers in more languages. Lines join books catalogued alike.`;
   }
   if (app.route.type === 'influence') {
     return 'Arrows run from the writer who influenced to the writer who was influenced. Earlier generations sit to the left. These are editorial claims on Wikidata, not measurements — read them as arguments.';
@@ -636,9 +666,23 @@ function rankedList() {
   });
   rows.sort((a, b) => b.score - a.score);
 
+  // An award map reads best as a chronology: where Wikidata recorded the year
+  // each book won, that's the order the list goes in.
+  const dated = app.route.type === 'award' && rows.some((row) => app.graph.getNodeAttribute(row.id, 'awarded'));
+  if (dated) {
+    for (const row of rows) {
+      row.year = app.graph.getNodeAttribute(row.id, 'awarded');
+      if (row.year) row.sub = row.sub ? `${formatYear(row.year)} · ${row.sub}` : formatYear(row.year);
+    }
+    rows.sort((a, b) => (a.year ?? 9999) - (b.year ?? 9999) || b.score - a.score);
+  }
+
+  const fame = 'Most widely known first, by how many languages Wikipedia covers it in.';
   const hints = {
     subject: 'Strongest answers to your subjects first.',
-    genre: 'Most widely known first, by how many languages Wikipedia covers it in.',
+    genre: fame,
+    theme: fame,
+    award: dated ? 'In the order they won.' : fame,
     influence: 'The writers the most lines run through, first.',
   };
   return {
@@ -883,7 +927,7 @@ async function copyReadingList() {
   const titles = titlesFor(app.route, app);
   const ids = app.pathShown && app.path ? app.path : orderedIds();
 
-  const lines = [titles.title, `Mapped with Subtext. Catalogue data from Open Library.`, ''];
+  const lines = [titles.title, 'Mapped with Subtext. Catalogue data from Open Library; genres, awards and influence from Wikidata.', ''];
   ids.forEach((id, index) => {
     const node = app.graph.getNodeAttributes(id);
     const named = node.byline ? `${node.label} — ${node.byline}` : node.label;
@@ -942,6 +986,7 @@ function initChrome() {
       if (type === 'author') navigate({ type: 'author', query: a });
       if (type === 'influence') navigate({ type: 'influence', query: a });
       if (type === 'subject') navigate({ type: 'subject', subjects: a.split(',') });
+      if (isCollection(type)) navigate({ type, query: a });
     });
   });
 

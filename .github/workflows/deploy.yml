@@ -3,8 +3,8 @@
 # One-time setup: in the repo, go to Settings -> Pages and set Source to
 # "GitHub Actions". No gh-pages branch needed, and dist stays out of the repo.
 #
-# There are no secrets here. Subtext talks to Open Library and Wikidata, and
-# neither needs an API key, so the published site works for anyone who opens it.
+# There are no secrets here. Subtext talks to Open Library, Wikidata and Wikipedia,
+# and none needs an API key, so the published site works for anyone who opens it.
 
 name: Deploy to GitHub Pages
 

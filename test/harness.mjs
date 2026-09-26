@@ -1,9 +1,9 @@
 /**
- * Stands in for Open Library and Wikidata so the map builders can be exercised
- * without touching either service. The shapes here mirror the real responses:
- * search returns `docs` with `/works/OL…W` keys and a `subject` array, the
- * authors search returns bare keys, and the query service returns
- * `results.bindings`.
+ * Stands in for Open Library, Wikidata and Wikipedia so the map builders can be
+ * exercised without touching any of them. The shapes here mirror the real
+ * responses: search returns `docs` with `/works/OL…W` keys and a `subject`
+ * array, the authors search returns bare keys, the query service returns
+ * `results.bindings`, and Wikipedia's summary endpoint returns an `extract`.
  */
 
 const WORKS = [
@@ -174,6 +174,39 @@ const ITEM_KEYS = { Q108: ['OL80W', 'OL81W'] };
 const REDIRECTS = { OL81W: 'OL8W' };
 const SITELINKS = { Q101: 60, Q105: 30, Q107: 138, Q108: 74, Q103: 50, Q106: 20, Q110: 12 };
 
+// Wikidata's other vocabularies, keyed by Open Library work: awards (P166)
+// with the year won, main subjects (P921), first publication (P577), original
+// language (P407), series (P179), and the English Wikipedia article. Persepolis
+// was written in French, which is the kind of fact the catalogue doesn't carry.
+const AWARD_LABELS = { Q9: 'Hugo Award for Best Graphic Story', Q10: 'Pulitzer Prize Special Citation' };
+const AWARDS = { OL1W: [['Q9', 1988]], OL5W: [['Q9', 1987]], OL3W: [['Q10', 1992]] };
+const THEME_LABELS = { Q11: 'totalitarianism', Q12: 'vigilantism' };
+const THEMES = { OL7W: ['Q11'], OL8W: ['Q11'], OL1W: ['Q12'], OL5W: ['Q12'] };
+const PUBLISHED = { OL1W: '1986-09-01T00:00:00Z', OL4W: '2000-01-01T00:00:00Z', OL7W: '1949-06-08T00:00:00Z', OL9W: '2000-01-01T00:00:00Z' };
+const LANGUAGE = { OL1W: ['Q1860', 'English'], OL4W: ['Q150', 'French'], OL7W: ['Q1860', 'English'] };
+const SERIES = { OL4W: ['Q13', 'Persepolis', 1] };
+const ARTICLES = { OL1W: 'Watchmen', OL4W: 'Persepolis_(comics)', OL9W: 'Jimmy_Corrigan,_the_Smartest_Kid_on_Earth' };
+// A writer's honours, with how many Wikipedias cover each: the doctorate is
+// there to be filtered out.
+const AUTHOR_AWARDS = { Q205721: [['Q9', 'Hugo Award for Best Graphic Story', 1988, 16], ['Q14', 'Honorary doctorate', null, 3]] };
+
+// What Wikipedia's summary endpoint says about the articles above.
+const WIKIPEDIA = {
+  Watchmen: { title: 'Watchmen', description: '1986–87 comic book limited series', extract: 'Watchmen is a comic book limited series by Alan Moore and Dave Gibbons.' },
+  'Jimmy_Corrigan,_the_Smartest_Kid_on_Earth': {
+    title: 'Jimmy Corrigan, the Smartest Kid on Earth',
+    description: '2000 graphic novel by Chris Ware',
+    extract: 'Jimmy Corrigan, the Smartest Kid on Earth is a graphic novel by Chris Ware, published in 2000.',
+  },
+  'Persepolis_(comics)': { title: 'Persepolis (comics)', description: 'autobiographical graphic novel', extract: 'Persepolis is an autobiographical graphic novel by Marjane Satrapi.' },
+  Alan_Moore: {
+    title: 'Alan Moore',
+    description: 'English comics writer',
+    extract: 'Alan Moore is an English author known primarily for his work in comic books.',
+    thumbnail: { source: 'https://upload.wikimedia.org/moore.jpg', width: 200, height: 300 },
+  },
+};
+
 const asDoc = (work) => ({
   key: `/works/${work.key}`,
   title: work.title,
@@ -197,7 +230,7 @@ const asDoc = (work) => ({
 const hasSubject = (work, subject) =>
   work.subjects.some((s) => s.toLowerCase() === String(subject).toLowerCase());
 
-export const calls = { openLibrary: [], sparql: 0 };
+export const calls = { openLibrary: [], sparql: 0, wikipedia: 0 };
 
 function json(body) {
   return Promise.resolve({
@@ -210,9 +243,19 @@ function json(body) {
 export function installFakeNetwork() {
   calls.openLibrary = [];
   calls.sparql = 0;
+  calls.wikipedia = 0;
 
   globalThis.fetch = (input) => {
     const url = new URL(String(input));
+
+    // Wikipedia's summary endpoint: the article's lead, or a 404.
+    if (url.hostname === 'en.wikipedia.org') {
+      calls.wikipedia += 1;
+      const title = decodeURIComponent(url.pathname.replace('/api/rest_v1/page/summary/', ''));
+      const page = WIKIPEDIA[title];
+      if (!page) return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ type: 'not_found' }) });
+      return json({ type: 'standard', ...page, content_urls: { desktop: { page: `https://en.wikipedia.org/wiki/${title}` } } });
+    }
 
     if (url.hostname === 'query.wikidata.org') {
       calls.sparql += 1;
@@ -224,9 +267,14 @@ export function installFakeNetwork() {
       const q = (url.searchParams.get('search') || '').toLowerCase();
       const hits = [
         ...Object.entries(GENRE_LABELS).map(([id, label]) => ({ id, label, description: 'genre of fiction' })),
+        ...Object.entries(AWARD_LABELS).map(([id, label]) => ({ id, label, description: 'literary award' })),
+        ...Object.entries(THEME_LABELS).map(([id, label]) => ({ id, label, description: 'political system' })),
         ...Object.entries(LABELS).map(([id, label]) => ({ id, label, description: 'writer' })),
+        // The books themselves turn up too, described the way Wikidata describes
+        // a work, which is how a title is kept from being offered as a genre.
+        ...WORKS.map((w) => ({ id: ITEM_OF[w.key] || 'Q0', label: w.title, description: `${w.year} graphic novel by ${w.author[1]}` })),
       ].filter((hit) => hit.label.toLowerCase().includes(q));
-      return json({ search: hits.slice(0, 5) });
+      return json({ search: hits.slice(0, Number(url.searchParams.get('limit') || 5)) });
     }
 
     calls.openLibrary.push(url.pathname + url.search);
@@ -290,7 +338,9 @@ export function installFakeNetwork() {
         title: found.title,
         subjects: found.subjects,
         covers: [1000],
-        description: { type: '/type/text', value: `A description of ${found.title}.` },
+        // Jimmy Corrigan stands for the many works Open Library has no
+        // description for, which is where Wikipedia's paragraph comes in.
+        ...(found.key === 'OL9W' ? {} : { description: { type: '/type/text', value: `A description of ${found.title}.` } }),
         authors: [{ author: { key: `/authors/${found.author[0]}` } }],
       });
     }
@@ -341,30 +391,68 @@ function bindingsFor(query) {
   const entity = (qid) => ({ type: 'uri', value: `http://www.wikidata.org/entity/${qid}` });
   const literal = (v) => ({ type: 'literal', value: v });
 
-  // worksInGenre: VALUES ?genre { wd:Q… }, the genres run backwards — or,
-  // with no P136 in the query, just the genre's name.
-  if (query.includes('VALUES ?genre')) {
-    const qid = /VALUES \?genre \{ wd:(Q\d+) \}/.exec(query)?.[1];
-    const label = GENRE_LABELS[qid];
-    if (!query.includes('P136')) return label ? [{ genreLabel: literal(label) }] : [];
+  // worksUnder: VALUES ?collection { wd:Q… } with the property in ps:P…, one
+  // of the vocabularies run backwards — or, with no ps: in the query, just its
+  // name.
+  if (query.includes('VALUES ?collection')) {
+    const qid = /VALUES \?collection \{ wd:(Q\d+) \}/.exec(query)?.[1];
+    const property = /ps:(P\d+)/.exec(query)?.[1];
+    const label = GENRE_LABELS[qid] || AWARD_LABELS[qid] || THEME_LABELS[qid];
+    if (!property) return label ? [{ collectionLabel: literal(label) }] : [];
+
+    // Which works carry the value and, for an award, the year they won it.
+    const carriers = new Map();
+    if (property === 'P136') {
+      for (const [key, genres] of Object.entries(GENRES)) if (genres.some(([g]) => g === qid)) carriers.set(key, null);
+    } else if (property === 'P166') {
+      for (const [key, awards] of Object.entries(AWARDS)) {
+        const won = awards.find(([a]) => a === qid);
+        if (won) carriers.set(key, won[1]);
+      }
+    } else if (property === 'P921') {
+      for (const [key, themes] of Object.entries(THEMES)) if (themes.includes(qid)) carriers.set(key, null);
+    }
+
     const rows = [];
-    for (const [key, genres] of Object.entries(GENRES)) {
-      if (!genres.some(([g]) => g === qid)) continue;
+    for (const [key, year] of carriers) {
       // The real query filters writers and editions out; the harness leaves
       // one writer in, so the builder is seen to cope with either.
       const item = ITEM_OF[key];
       const keys = ITEM_KEYS[item] || Object.keys(ITEM_OF).filter((k) => ITEM_OF[k] === item);
       for (const olKey of keys) {
         rows.push({
-          genreLabel: literal(label),
+          collectionLabel: literal(label),
           item: entity(item),
           itemLabel: literal(WORKS.find((w) => w.key === key)?.title || LABELS[item] || item),
           ol: literal(olKey),
           sitelinks: literal(String(SITELINKS[item] || 0)),
+          ...(year ? { when: literal(`${year}-01-01T00:00:00Z`) } : {}),
         });
       }
     }
     return rows.sort((a, b) => Number(b.sitelinks.value) - Number(a.sitelinks.value));
+  }
+
+  // workFacts: VALUES ?ol { "OL1W" } with the publication-date branch. One item
+  // per work; a key nothing here knows comes back empty, as it does for the half
+  // of any real map Wikidata hasn't heard of.
+  if (query.includes('wdt:P577')) {
+    const key = /"(OL\d+W)"/.exec(query)?.[1];
+    if (!(GENRES[key] || AWARDS[key] || THEMES[key] || PUBLISHED[key] || LANGUAGE[key] || ARTICLES[key])) return [];
+    const item = ITEM_OF[key] || `Q9${key.replace(/\D/g, '')}`;
+    const rows = [];
+    const row = (type, extra) => rows.push({ item: entity(item), type: literal(type), ...extra });
+    if (PUBLISHED[key]) row('published', { text: literal(PUBLISHED[key]) });
+    if (LANGUAGE[key]) row('language', { value: entity(LANGUAGE[key][0]), valueLabel: literal(LANGUAGE[key][1]) });
+    for (const [qid, label] of GENRES[key] || []) row('genre', { value: entity(qid), valueLabel: literal(label) });
+    for (const qid of THEMES[key] || []) row('theme', { value: entity(qid), valueLabel: literal(THEME_LABELS[qid]) });
+    for (const [qid, year] of AWARDS[key] || []) {
+      row('award', { value: entity(qid), valueLabel: literal(AWARD_LABELS[qid]), when: literal(`${year}-01-01T00:00:00Z`), fame: literal('20') });
+    }
+    if (SERIES[key]) row('series', { value: entity(SERIES[key][0]), valueLabel: literal(SERIES[key][1]), ordinal: literal(String(SERIES[key][2])) });
+    if (ARTICLES[key]) row('article', { text: literal(`https://en.wikipedia.org/wiki/${ARTICLES[key]}`) });
+    row('description', { text: literal(`Wikidata's line on ${key}`) });
+    return rows;
   }
 
   // genresFor: VALUES ?ol { "OL1W" … } joined to P136.
@@ -435,6 +523,15 @@ function bindingsFor(query) {
       { type: literal('article'), text: literal('https://en.wikipedia.org/wiki/Alan_Moore') },
       { type: literal('genre'), value: entity('Q1'), valueLabel: literal('superhero comics') },
     ];
+    for (const [id, label, year, fame] of AUTHOR_AWARDS[qid] || []) {
+      rows.push({
+        type: literal('award'),
+        value: entity(id),
+        valueLabel: literal(label),
+        fame: literal(String(fame)),
+        ...(year ? { when: literal(`${year}-01-01T00:00:00Z`) } : {}),
+      });
+    }
     for (const source of INFLUENCED_BY[qid] || []) {
       rows.push({
         type: literal('influencedBy'),

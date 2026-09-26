@@ -381,7 +381,9 @@ export function currentWorkKey(key) {
       current = next;
     }
     return null;
-  });
+    // A null here is an answer, not a failure: the record is gone, and it will
+    // still be gone next time.
+  }, { keepNull: true });
 }
 
 /**

@@ -1,4 +1,5 @@
 import * as ol from '../api/openlibrary.js';
+import * as wd from '../api/wikidata.js';
 import { h, icons, formatCount, lifespan, titleCaseSubject } from './dom.js';
 
 const MAX_SUBJECTS = 4;
@@ -143,6 +144,7 @@ export function createSearch(root, handlers) {
   const {
     onPickBook,
     onPickAuthor,
+    onPickCollection,
     onPickNode,
     onPickEnd,
     onSubjectsChange,
@@ -321,10 +323,14 @@ export function createSearch(root, handlers) {
     renderGroups([onMap, guessed], 'Searching…');
 
     try {
-      const [books, authors, cataloguedSubjects] = await Promise.all([
+      const [books, authors, cataloguedSubjects, collections] = await Promise.all([
         ol.searchBooks(query, 5),
         ol.searchAuthors(query, 4),
         mode === 'browse' && subjects.length < MAX_SUBJECTS ? ol.searchSubjects(query, 5) : Promise.resolve([]),
+        // Wikidata's genres and awards, each the way into a map of everything
+        // filed under it. Never while picking the far end of a path, which
+        // runs between two books.
+        mode === 'browse' ? wd.searchCollections(query, 3) : Promise.resolve([]),
       ]);
       if (id !== requestId) return;
 
@@ -390,9 +396,28 @@ export function createSearch(root, handlers) {
         });
       }
 
-      // An exact subject match is almost certainly what was meant.
+      const wikidataGroup = {
+        label: 'On Wikidata',
+        items: collections.map((item) => ({
+          type: item.kind,
+          icon: item.kind === 'award' ? 'award' : 'subject',
+          qid: item.qid,
+          name: item.label,
+          primary: item.label,
+          detail: item.description,
+          secondary: item.kind === 'award' ? 'Award' : 'Genre',
+        })),
+      };
+
+      // An exact subject match is almost certainly what was meant, and so is a
+      // genre or award typed out in full; otherwise Wikidata's offers come last.
       const exact = VOCABULARY.includes(query.toLowerCase());
-      const rest = exact ? [guessed, bookGroup, authorGroup] : [bookGroup, authorGroup, guessed];
+      const named = collections.some((item) => item.label.toLowerCase() === query.toLowerCase());
+      const rest = exact
+        ? [guessed, bookGroup, authorGroup, wikidataGroup]
+        : named
+          ? [wikidataGroup, bookGroup, authorGroup, guessed]
+          : [bookGroup, authorGroup, guessed, wikidataGroup];
       const groups = [onMap, ...rest];
       const empty = groups.every((g) => !g.items.length);
       renderGroups(groups, empty ? `Open Library has nothing matching “${query}”.` : null);
@@ -428,6 +453,7 @@ export function createSearch(root, handlers) {
     if (item.type === 'node') onPickNode(item.id);
     if (item.type === 'book') onPickBook(item.key, item.name);
     if (item.type === 'author') onPickAuthor(item.key, item.name);
+    if (item.type === 'genre' || item.type === 'award') onPickCollection(item.type, item.qid);
   }
 
   // ---------- Chips ----------

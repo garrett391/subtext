@@ -670,15 +670,39 @@ export async function buildSubjectMap(subjects, ctx) {
   };
 }
 
-// ---------- Genre maps ----------
+// ---------- Collection maps: genres, awards, themes ----------
 
-const GENRE_BOOKS = 36;
+const COLLECTION_BOOKS = 36;
 // Work IDs looked up on Open Library. More than the map holds, because an item
 // can carry several and some of them no longer resolve.
-const GENRE_KEYS = 60;
+const COLLECTION_KEYS = 60;
 // Items whose stale IDs are chased through redirects, one request each. Capped
 // so a genre full of merged records costs a few seconds rather than a minute.
-const GENRE_REDIRECTS = 16;
+const COLLECTION_REDIRECTS = 16;
+
+/**
+ * What each kind of collection is called while it loads and when it comes back
+ * empty. The vocabularies differ in reach: genres sit on most of the books
+ * Wikidata knows, main subjects on about a quarter, and an award only on what
+ * won it.
+ */
+const COLLECTION_COPY = {
+  genre: {
+    asking: 'Asking Wikidata what it files under this genre',
+    empty: (label) =>
+      `Wikidata files nothing with an Open Library record as “${label}”. Its genres reach the well-known corner of the catalogue and stop; try a subject map instead.`,
+  },
+  award: {
+    asking: 'Asking Wikidata what has won this award',
+    empty: (label) =>
+      `Wikidata records no book with an Open Library record under “${label}”. An award given to a writer, a short story or a film doesn't come back as a book; try one given for novels.`,
+  },
+  theme: {
+    asking: 'Asking Wikidata what is about this',
+    empty: (label) =>
+      `Wikidata records no book with an Open Library record as being about “${label}”. It files a main subject on about a quarter of the books it knows; try a subject map instead.`,
+  },
+};
 
 // A title with its subtitle, series tag and punctuation gone: "Frankenstein;
 // or, The Modern Prometheus" and "Llana of Gathol (Mars #10)" become
@@ -701,18 +725,21 @@ function sameTitle(book, item) {
   return a && b && a === b ? 1 : 0;
 }
 /**
- * Everything Wikidata files under one genre. Where a subject map asks the
- * catalogue what's shelved under a heading, this asks Wikidata what's been
- * filed under a term from its controlled vocabulary, then reads those books
- * out of Open Library in a couple of batched lookups so they can be linked the
- * same way every other map is: by what they're catalogued under.
+ * Everything Wikidata files under one genre, award or main subject. Where a
+ * subject map asks the catalogue what's shelved under a heading, this asks
+ * Wikidata what's been filed under a term from one of its controlled
+ * vocabularies, then reads those books out of Open Library in a couple of
+ * batched lookups so they can be linked the same way every other map is: by
+ * what they're catalogued under.
  *
  * Dots are sized by how widely known a book is — how many Wikipedias have an
- * article on it — since every book here answers to the genre equally.
+ * article on it — since every book here answers to the collection equally.
  */
-export async function buildGenreMap(qid, ctx) {
-  ctx.progress('Asking Wikidata what it files under this genre');
-  const found = await wd.worksInGenre(qid);
+export async function buildCollectionMap(kind, qid, ctx) {
+  const copy = COLLECTION_COPY[kind];
+  if (!copy) throw new EmptyMapError(`Subtext doesn't draw maps of “${kind}”.`);
+  ctx.progress(copy.asking);
+  const found = await wd.worksUnder(kind, qid);
   ctx.check();
   if (found === null) {
     throw new EmptyMapError(
@@ -720,23 +747,20 @@ export async function buildGenreMap(qid, ctx) {
     );
   }
   const label = found.label || qid;
-  if (!found.works.length) {
-    throw new EmptyMapError(
-      `Wikidata files nothing with an Open Library record as “${label}”. Its genres reach the well-known corner of the catalogue and stop; try a subject map instead.`,
-    );
-  }
+  if (!found.works.length) throw new EmptyMapError(copy.empty(label));
 
   // One Wikidata item, however many Open Library IDs it carries, is one book.
   const items = new Map();
   for (const work of found.works) {
-    const item = items.get(work.qid) || { qid: work.qid, label: work.label, sitelinks: work.sitelinks, keys: [] };
+    const item = items.get(work.qid) || { qid: work.qid, label: work.label, sitelinks: work.sitelinks, year: null, keys: [] };
     item.keys.push(work.key);
+    if (work.year && (!item.year || work.year < item.year)) item.year = work.year;
     items.set(work.qid, item);
   }
   const ordered = [...items.values()].sort((a, b) => b.sitelinks - a.sitelinks);
   const keys = [];
   for (const item of ordered) {
-    if (keys.length >= GENRE_KEYS) break;
+    if (keys.length >= COLLECTION_KEYS) break;
     keys.push(...item.keys);
   }
 
@@ -765,7 +789,7 @@ export async function buildGenreMap(qid, ctx) {
       const pick = pickFor(item);
       return !pick || !sameTitle(pick, item);
     })
-    .slice(0, GENRE_REDIRECTS);
+    .slice(0, COLLECTION_REDIRECTS);
   if (stale.length) {
     ctx.progress(`Following ${stale.length} merged records`);
     const moved = await Promise.all(
@@ -797,7 +821,7 @@ export async function buildGenreMap(qid, ctx) {
   const chosen = [];
   const drawnKeys = new Set();
   for (const item of ordered) {
-    if (chosen.length >= GENRE_BOOKS) break;
+    if (chosen.length >= COLLECTION_BOOKS) break;
     const book = pickFor(item);
     // Two items can land on the same surviving record; one dot is enough.
     if (book && !drawnKeys.has(book.key)) {
@@ -807,7 +831,7 @@ export async function buildGenreMap(qid, ctx) {
   }
   if (!chosen.length) {
     throw new EmptyMapError(
-      `Wikidata files ${items.size} books as “${label}”, but Open Library returned none of them by ID. Try again in a moment.`,
+      `Wikidata lists ${items.size} books under “${label}”, but Open Library returned none of them by ID. Try again in a moment.`,
     );
   }
 
@@ -817,12 +841,17 @@ export async function buildGenreMap(qid, ctx) {
     // Fame is skewed — one book on a hundred Wikipedias, most on a handful —
     // so it's read on a log scale, and nothing shrinks below a third.
     const score = 0.3 + 0.7 * (Math.log1p(item.sitelinks) / Math.log1p(fame));
-    // Every book here is known to carry the genre, whatever its current ID
-    // says; the overlay replaces this with the full list where it can.
+    // On a genre map every book is known to carry the genre, whatever its
+    // current ID says; the overlay replaces this with the full list where it
+    // can. An award map remembers the year each book won.
     upsertNode(
       g,
       bookId(book.key),
-      bookNode({ ...book, genres: [{ qid, label }] }, score, 1, { qid: item.qid, sitelinks: item.sitelinks }),
+      bookNode(kind === 'genre' ? { ...book, genres: [{ qid, label }] } : book, score, 1, {
+        qid: item.qid,
+        sitelinks: item.sitelinks,
+        awarded: kind === 'award' ? item.year : null,
+      }),
     );
   }
   ctx.update(g, { fresh: true, centerId: null });
@@ -831,15 +860,16 @@ export async function buildGenreMap(qid, ctx) {
   weave(g, { skipSeedPairs: false, maxLinks: 7 });
   ctx.update(g, { centerId: null });
 
-  // Every book here shares the seed genre, which the rarity weighting reads as
-  // common ground; what the overlay adds is the second genre two of them share.
+  // On a genre map every book shares the seed genre, which the rarity weighting
+  // reads as common ground; what the overlay adds is the second genre two of
+  // them share. On an award or theme map it adds the genres outright.
   addGenreOverlay(g, ctx, { skipSeedPairs: false, maxLinks: 7 }).catch(() => {});
 
   return {
     graph: g,
     seedId: null,
     seedLabel: label,
-    genre: { qid, label, known: items.size, truncated: found.truncated, drawn: chosen.length },
+    collection: { kind, qid, label, known: items.size, truncated: found.truncated, drawn: chosen.length },
   };
 }
 
